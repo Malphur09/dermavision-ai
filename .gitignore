@@ -1,0 +1,38 @@
+# Python / Flask
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+*.pt
+*.pth
+*.onnx
+*.h5
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+.env.local
+.env.*.local
+
+# Dataset & model weights
+data/
+datasets/
+*.csv
+checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
