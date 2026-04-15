@@ -154,7 +154,13 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
                 value={patientId}
                 onChange={(e) => {
                   setPatientId(e.target.value);
-                  if (errors.patientId) setErrors({ ...errors, patientId: undefined });
+                  if (errors.patientId) {
+                    setErrors((prev) => {
+                      const next = { ...prev };
+                      delete next.patientId;
+                      return next;
+                    });
+                  }
                 }}
                 placeholder="e.g., PT-2024-001"
                 className={`w-full px-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 ${
@@ -182,7 +188,13 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
                   value={age}
                   onChange={(e) => {
                     setAge(e.target.value);
-                    if (errors.age) setErrors({ ...errors, age: undefined });
+                    if (errors.age) {
+                      setErrors((prev) => {
+                        const next = { ...prev };
+                        delete next.age;
+                        return next;
+                      });
+                    }
                   }}
                   placeholder="e.g., 45"
                   className={`w-full px-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 ${
@@ -208,7 +220,13 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
                   value={sex}
                   onChange={(e) => {
                     setSex(e.target.value);
-                    if (errors.sex) setErrors({ ...errors, sex: undefined });
+                    if (errors.sex) {
+                      setErrors((prev) => {
+                        const next = { ...prev };
+                        delete next.sex;
+                        return next;
+                      });
+                    }
                   }}
                   className={`w-full px-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 ${
                     errors.sex 
@@ -239,7 +257,13 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
                 value={lesionSite}
                 onChange={(e) => {
                   setLesionSite(e.target.value);
-                  if (errors.lesionSite) setErrors({ ...errors, lesionSite: undefined });
+                  if (errors.lesionSite) {
+                    setErrors((prev) => {
+                      const next = { ...prev };
+                      delete next.lesionSite;
+                      return next;
+                    });
+                  }
                 }}
                 className={`w-full px-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 ${
                   errors.lesionSite 

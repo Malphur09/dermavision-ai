@@ -12,10 +12,24 @@ AI-powered multi-class skin lesion classification using EfficientNetB4 and Grad-
 
 ```
 dermavision-ai/
-├── frontend/     # Next.js application
-└── backend/      # Flask API
+├── src/                # Next.js app
+├── api/                # Flask API
+├── Dockerfile.web      # Next.js container
+├── Dockerfile.api      # Flask container
+└── docker-compose.yaml # Local dev orchestration
 ```
 
-## Getting Started
+## Getting Started (Docker)
 
-See setup instructions in `/frontend/README.md` and `/backend/README.md`.
+1. Copy environment template:
+   ```bash
+   cp .env.example .env
+   ```
+2. Fill in Supabase values in `.env`.
+3. Start both services:
+   ```bash
+   docker compose up --build
+   ```
+
+The web app will be available at `http://localhost:3000`.  
+Next.js forwards `/api/*` requests to the Flask service over the Docker network via `http://api:5328`.

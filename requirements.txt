@@ -1,6 +1,8 @@
 flask
 flask-cors
+gunicorn
 python-dotenv
 pillow
+grad-cam
 torch
 torchvision

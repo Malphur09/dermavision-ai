@@ -1,0 +1,35 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      FLASK_INTERNAL_URL: ${FLASK_INTERNAL_URL:-http://api:5328}
+    depends_on:
+      - api
+    volumes:
+      - .:/app
+      - web_node_modules:/app/node_modules
+      - web_next:/app/.next
+    command: npm run dev -- -H 0.0.0.0 -p 3000
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    expose:
+      - "5328"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    command: gunicorn --bind 0.0.0.0:5328 --workers 2 --threads 4 --reload api.index:app
+
+volumes:
+  web_node_modules:
+  web_next:

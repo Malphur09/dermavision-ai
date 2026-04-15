@@ -1,7 +1,17 @@
 import { Moon, Sun, LogOut, Activity, Upload, FileText, Users, User, BarChart3, FolderOpen } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
-import { Screen, UserRole } from '../App';
 import { toast } from 'sonner';
+
+type Screen =
+  | 'diagnostic'
+  | 'results'
+  | 'records'
+  | 'report'
+  | 'profile'
+  | 'admin'
+  | 'dashboard';
+
+type UserRole = 'doctor' | 'admin';
 
 interface NavigationProps {
   currentScreen: Screen;
