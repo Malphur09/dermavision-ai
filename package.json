@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently \"next dev\" \"venv/bin/flask --app api/index run -p 5328\"",
+    "dev:web": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
