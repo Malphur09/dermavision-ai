@@ -24,7 +24,7 @@ CLASSES = [
     "Squamous Cell Carcinoma",
 ]
 
-MODEL_PATH = os.getenv("MODEL_PATH", "dermavision_working.onnx")
+MODEL_PATH = os.getenv("MODEL_PATH", "efficientnetb4_isic2019.onnx")
 
 ort_session = None
 try:
