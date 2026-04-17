@@ -1,17 +1,126 @@
-import { Save, FileDown, Clock } from 'lucide-react';
+"use client";
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Save, FileDown, Clock, AlertCircle } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
 
-const classificationResults = [
-  { class: 'Melanoma', probability: 92.5, f1Score: 0.89, rank: 1 },
-  { class: 'Nevus', probability: 4.2, f1Score: 0.91, rank: 2 },
-  { class: 'Basal Cell Carcinoma (BCC)', probability: 1.8, f1Score: 0.87, rank: 3 },
-  { class: 'Actinic Keratosis', probability: 0.7, f1Score: 0.85, rank: 4 },
-  { class: 'Benign Keratosis', probability: 0.4, f1Score: 0.88, rank: 5 },
-  { class: 'Dermatofibroma', probability: 0.2, f1Score: 0.82, rank: 6 },
-  { class: 'Vascular Lesion', probability: 0.1, f1Score: 0.84, rank: 7 },
-  { class: 'Squamous Cell Carcinoma', probability: 0.1, f1Score: 0.83, rank: 8 },
-];
+const IMAGES_BUCKET = 'dermoscopy-images';
+
+const F1_SCORES: Record<string, number> = {
+  'Melanoma': 0.89,
+  'Melanocytic Nevus': 0.91,
+  'Basal Cell Carcinoma': 0.87,
+  'Actinic Keratosis': 0.85,
+  'Benign Keratosis': 0.88,
+  'Dermatofibroma': 0.82,
+  'Vascular Lesion': 0.84,
+  'Squamous Cell Carcinoma': 0.83,
+};
+
+const CLINICAL_NOTES: Record<string, string> = {
+  'Melanoma': 'High confidence melanoma detection. Recommend immediate dermatological consultation and biopsy for histopathological confirmation.',
+  'Squamous Cell Carcinoma': 'High confidence squamous cell carcinoma detection. Urgent dermatological evaluation recommended.',
+  'Basal Cell Carcinoma': 'Basal cell carcinoma suspected. Dermatological consultation recommended for treatment planning.',
+  'Actinic Keratosis': 'Actinic keratosis detected. Monitor closely; consider cryotherapy or topical treatment.',
+  'Melanocytic Nevus': 'Benign melanocytic nevus. Routine monitoring recommended.',
+  'Benign Keratosis': 'Benign keratosis-like lesion. No urgent action required.',
+  'Dermatofibroma': 'Dermatofibroma suspected. Benign; no treatment required unless symptomatic.',
+  'Vascular Lesion': 'Vascular lesion detected. Clinical correlation recommended.',
+};
+
+interface CaseSession {
+  caseId: string;
+  patientId: string;
+  patientName: string;
+  predictedClass: string;
+  probabilities: Record<string, number>;
+  confidence: number | null;
+  riskLevel: string;
+  lesionSite: string;
+  storagePath: string;
+}
 
 export function DiagnosisResults() {
+  const router = useRouter();
+  const [caseData, setCaseData] = useState<CaseSession | null>(null);
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [loadingImage, setLoadingImage] = useState(true);
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem('lastCase');
+    if (!raw) { setLoadingImage(false); return; }
+
+    let parsed: CaseSession;
+    try { parsed = JSON.parse(raw); } catch { setLoadingImage(false); return; }
+    setCaseData(parsed);
+
+    const supabase = createClient();
+    supabase.storage
+      .from(IMAGES_BUCKET)
+      .createSignedUrl(parsed.storagePath, 3600)
+      .then(({ data }) => { if (data?.signedUrl) setImageUrl(data.signedUrl); })
+      .finally(() => setLoadingImage(false));
+  }, []);
+
+  if (!caseData) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex flex-col items-center justify-center py-24 space-y-4">
+          <AlertCircle className="h-12 w-12 text-gray-400" />
+          <p className="text-gray-600 dark:text-gray-400">No case data found. Run a diagnosis first.</p>
+          <button
+            onClick={() => router.push('/diagnostic')}
+            className="px-6 py-3 bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition-colors"
+          >
+            Go to Diagnostic
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const ranked = Object.entries(caseData.probabilities)
+    .sort(([, a], [, b]) => b - a)
+    .map(([cls, prob], idx) => ({
+      class: cls,
+      probability: Math.round(prob * 10000) / 100,
+      f1Score: F1_SCORES[cls] ?? 0.80,
+      rank: idx + 1,
+    }));
+
+  const clinicalNote = CLINICAL_NOTES[caseData.predictedClass] ?? 'Clinical correlation recommended.';
+  const isHighRisk = caseData.riskLevel === 'High Risk';
+
+  const ImageSlot = ({ label, pending }: { label: string; pending?: boolean }) => (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
+      <h3 className="text-gray-900 dark:text-white mb-4">{label}</h3>
+      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden relative flex items-center justify-center">
+        {loadingImage ? (
+          <span className="text-gray-400 text-sm">Loading...</span>
+        ) : imageUrl ? (
+          <img
+            src={imageUrl}
+            alt={label}
+            className={`w-full h-full object-cover${pending ? ' opacity-70' : ''}`}
+          />
+        ) : (
+          <span className="text-gray-400 text-sm">Image unavailable</span>
+        )}
+        {pending && (
+          <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
+            Pending
+          </div>
+        )}
+      </div>
+      {pending && (
+        <div className="mt-4 flex items-center space-x-2 text-xs">
+          <div className="w-8 h-3 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-500 rounded"></div>
+          <span className="text-gray-600 dark:text-gray-400">Low → High Activation</span>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-8">
@@ -23,52 +132,14 @@ export function DiagnosisResults() {
         </p>
       </div>
 
-      {/* Top Section: Visuals and Results */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        {/* Left Panel: Visual Outputs */}
         <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-            <h3 className="text-gray-900 dark:text-white mb-4">
-              Original Image
-            </h3>
-            <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
-              <img
-                src="https://images.unsplash.com/photo-1602926280191-948de7f729c5?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxza2luJTIwbGVzaW9uJTIwZGVybWF0b2xvZ3l8ZW58MXx8fHwxNzY1MzIxNjkyfDA&ixlib=rb-4.1.0&q=80&w=1080"
-                alt="Original dermoscopic image"
-                className="w-full h-full object-cover"
-              />
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-            <h3 className="text-gray-900 dark:text-white mb-4">
-              Grad-CAM Visualization
-            </h3>
-            <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden relative">
-              <img
-                src="https://images.unsplash.com/photo-1677678711761-09e049805d97?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtZWRpY2FsJTIwaGVhdG1hcCUyMHZpc3VhbGl6YXRpb258ZW58MXx8fHwxNzY1Mzc4MDg5fDA&ixlib=rb-4.1.0&q=80&w=1080"
-                alt="Grad-CAM heatmap overlay"
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                Attention Heatmap
-              </div>
-            </div>
-            <div className="mt-4 flex items-center justify-between text-xs">
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-3 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-500 rounded"></div>
-                <span className="text-gray-600 dark:text-gray-400">Low → High Activation</span>
-              </div>
-            </div>
-          </div>
+          <ImageSlot label="Original Image" />
+          <ImageSlot label="Grad-CAM Visualization" pending />
         </div>
 
-        {/* Center Panel: Classification Results */}
         <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-          <h3 className="text-gray-900 dark:text-white mb-6">
-            Classification Results
-          </h3>
-
+          <h3 className="text-gray-900 dark:text-white mb-6">Classification Results</h3>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -81,7 +152,7 @@ export function DiagnosisResults() {
                 </tr>
               </thead>
               <tbody>
-                {classificationResults.map((result) => {
+                {ranked.map((result) => {
                   const isPredicted = result.rank === 1;
                   return (
                     <tr
@@ -100,7 +171,7 @@ export function DiagnosisResults() {
                         </span>
                       </td>
                       <td className="py-4 px-4">
-                        <span className={`${isPredicted ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}`}>
+                        <span className={isPredicted ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}>
                           {result.class}
                         </span>
                         {isPredicted && (
@@ -118,11 +189,9 @@ export function DiagnosisResults() {
                       <td className="py-4 px-4">
                         <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
                           <div
-                            className={`h-2.5 rounded-full ${
-                              isPredicted ? 'bg-red-600' : 'bg-teal-500'
-                            }`}
-                            style={{ width: `${result.probability}%` }}
-                          ></div>
+                            className={`h-2.5 rounded-full ${isPredicted ? 'bg-red-600' : 'bg-teal-500'}`}
+                            style={{ width: `${Math.min(result.probability, 100)}%` }}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -132,43 +201,58 @@ export function DiagnosisResults() {
             </table>
           </div>
 
-          <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-            <p className="text-sm text-yellow-800 dark:text-yellow-300">
-              <strong>Clinical Note:</strong> High confidence melanoma detection. Recommend immediate dermatological consultation and biopsy for histopathological confirmation.
+          <div className={`mt-6 p-4 border rounded-lg ${
+            isHighRisk
+              ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
+              : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
+          }`}>
+            <p className={`text-sm ${
+              isHighRisk
+                ? 'text-yellow-800 dark:text-yellow-300'
+                : 'text-blue-800 dark:text-blue-300'
+            }`}>
+              <strong>Clinical Note:</strong> {clinicalNote}
             </p>
           </div>
         </div>
       </div>
 
-      {/* Bottom Panel: Actions and Metadata */}
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
           <div className="flex items-center space-x-6">
             <div className="flex items-center space-x-2">
               <Clock className="h-5 w-5 text-gray-600 dark:text-gray-400" />
               <div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Inference Latency</p>
-                <p className="text-gray-900 dark:text-white">4.5 seconds</p>
+                <p className="text-xs text-gray-600 dark:text-gray-400">Patient</p>
+                <p className="text-gray-900 dark:text-white">{caseData.patientId}</p>
               </div>
             </div>
             <div className="border-l border-gray-300 dark:border-gray-600 pl-6">
-              <p className="text-xs text-gray-600 dark:text-gray-400">Model Version</p>
-              <p className="text-gray-900 dark:text-white">v2.3.1-ResNet50</p>
+              <p className="text-xs text-gray-600 dark:text-gray-400">Risk Level</p>
+              <p className={isHighRisk ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}>
+                {caseData.riskLevel}
+              </p>
             </div>
             <div className="border-l border-gray-300 dark:border-gray-600 pl-6">
               <p className="text-xs text-gray-600 dark:text-gray-400">Timestamp</p>
-              <p className="text-gray-900 dark:text-white">2025-12-10 14:32:18</p>
+              <p className="text-gray-900 dark:text-white">{new Date().toLocaleString()}</p>
             </div>
           </div>
 
           <div className="flex space-x-4">
-            <button className="flex items-center space-x-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg transition-colors shadow-md">
+            <button
+              onClick={() => router.push('/records')}
+              className="flex items-center space-x-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg transition-colors shadow-md"
+            >
               <Save className="h-5 w-5" />
-              <span>Save to Patient Record</span>
+              <span>View Patient Record</span>
             </button>
-            <button className="flex items-center space-x-2 px-6 py-3 bg-teal-600 hover:bg-teal-700 dark:bg-teal-500 dark:hover:bg-teal-600 text-white rounded-lg transition-colors shadow-md">
+            <button
+              onClick={() => router.push('/report')}
+              className="flex items-center space-x-2 px-6 py-3 bg-teal-600 hover:bg-teal-700 dark:bg-teal-500 dark:hover:bg-teal-600 text-white rounded-lg transition-colors shadow-md"
+            >
               <FileDown className="h-5 w-5" />
-              <span>Export Report (PDF)</span>
+              <span>Export Report</span>
             </button>
           </div>
         </div>

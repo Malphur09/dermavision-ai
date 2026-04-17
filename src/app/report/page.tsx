@@ -2,16 +2,21 @@
 import { useRouter } from "next/navigation";
 import { Navigation } from "@/components/Navigation";
 import { ReportGeneration } from "@/components/ReportGeneration";
+import { useAuth } from "@/contexts/AuthContext";
 
 export default function ReportPage() {
   const router = useRouter();
+  const { role, loading, signOut } = useAuth();
+
+  if (loading || !role) return null;
+
   return (
     <>
       <Navigation
         currentScreen="report"
-        userRole="doctor"
+        userRole={role}
         onNavigate={(screen) => router.push(`/${screen}`)}
-        onLogout={() => router.push("/login")}
+        onLogout={async () => { await signOut(); router.push("/login"); }}
       />
       <ReportGeneration />
     </>
