@@ -1,378 +1,519 @@
 "use client";
-import { useEffect, useState } from 'react';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Activity, Users, TrendingUp, Award } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
+import { useEffect, useMemo, useState } from "react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { CheckCircle2, Download, TrendingUp, Upload } from "lucide-react";
 
-const performanceData = [
-  { week: 'Week 1', f1Score: 0.87, accuracy: 0.89, precision: 0.88 },
-  { week: 'Week 2', f1Score: 0.88, accuracy: 0.90, precision: 0.89 },
-  { week: 'Week 3', f1Score: 0.89, accuracy: 0.91, precision: 0.90 },
-  { week: 'Week 4', f1Score: 0.90, accuracy: 0.92, precision: 0.91 },
-  { week: 'Week 5', f1Score: 0.89, accuracy: 0.91, precision: 0.90 },
-  { week: 'Week 6', f1Score: 0.91, accuracy: 0.93, precision: 0.92 },
-];
+import { createClient } from "@/lib/supabase/client";
+import {
+  ISIC_CLASSES,
+  mockConfusionMatrix,
+  seededCurve,
+} from "@/lib/mock-data";
+import { PageHeader } from "@/components/primitives/PageHeader";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 
-const SHORT_CLASS: Record<string, string> = {
-  'Melanoma': 'Melanoma',
-  'Melanocytic Nevus': 'Nevus',
-  'Basal Cell Carcinoma': 'BCC',
-  'Actinic Keratosis': 'Actinic K.',
-  'Benign Keratosis': 'Ben. Ker.',
-  'Dermatofibroma': 'Dermatofib.',
-  'Vascular Lesion': 'Vascular',
-  'Squamous Cell Carcinoma': 'SCC',
-};
+const { mat: CM_MAT, classes: CM_CLASSES } = mockConfusionMatrix();
 
-interface DashboardStats {
-  totalDiagnoses: number;
-  activeDoctors: number;
-  totalPatients: number;
-  totalReports: number;
-  highRiskCases: number;
-  benignCases: number;
-  reviewedPct: number;
-  doctorActivity: { doctor: string; diagnoses: number }[];
-  classificationBreakdown: { class: string; count: number }[];
+type Series = { x: number; y: number }[];
+
+function toSeries(values: number[]): Series {
+  return values.map((y, x) => ({ x, y: Number(y.toFixed(4)) }));
 }
 
 export function AdminDashboard() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [scansToday, setScansToday] = useState<number | null>(null);
+  const [range, setRange] = useState<"24h" | "7d" | "30d" | "all">("7d");
 
   useEffect(() => {
-    async function fetchStats() {
+    const load = async () => {
       const supabase = createClient();
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-
-      const [
-        diagnosesRes,
-        doctorsRes,
-        patientsRes,
-        reportsRes,
-        highRiskRes,
-        benignRes,
-        reviewedRes,
-        recentCasesRes,
-      ] = await Promise.all([
-        supabase.from('cases').select('*', { count: 'exact', head: true }),
-        supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('role', 'doctor'),
-        supabase.from('patients').select('*', { count: 'exact', head: true }),
-        supabase.from('reports').select('*', { count: 'exact', head: true }),
-        supabase.from('cases').select('*', { count: 'exact', head: true }).eq('risk_level', 'High Risk'),
-        supabase.from('cases').select('*', { count: 'exact', head: true }).eq('risk_level', 'Benign'),
-        supabase.from('cases').select('*', { count: 'exact', head: true }).eq('status', 'reviewed'),
-        supabase.from('cases')
-          .select('predicted_class, doctor_id, profiles(email)')
-          .gte('created_at', thirtyDaysAgo)
-          .limit(1000),
-      ]);
-
-      const recentCases = recentCasesRes.data ?? [];
-
-      // Doctor activity aggregation
-      const doctorMap: Record<string, number> = {};
-      for (const c of recentCases) {
-        const profile = c.profiles as unknown as { email: string } | null;
-        const label = profile?.email?.split('@')[0] ?? c.doctor_id;
-        doctorMap[label] = (doctorMap[label] ?? 0) + 1;
-      }
-      const doctorActivity = Object.entries(doctorMap)
-        .map(([doctor, diagnoses]) => ({ doctor, diagnoses }))
-        .sort((a, b) => b.diagnoses - a.diagnoses)
-        .slice(0, 5);
-
-      // Classification breakdown aggregation
-      const classMap: Record<string, number> = {};
-      for (const c of recentCases) {
-        if (c.predicted_class) {
-          const label = SHORT_CLASS[c.predicted_class] ?? c.predicted_class;
-          classMap[label] = (classMap[label] ?? 0) + 1;
-        }
-      }
-      const classificationBreakdown = Object.entries(classMap)
-        .map(([cls, count]) => ({ class: cls, count }))
-        .sort((a, b) => b.count - a.count);
-
-      const totalDiagnoses = diagnosesRes.count ?? 0;
-      const reviewedPct = totalDiagnoses > 0
-        ? Math.round(((reviewedRes.count ?? 0) / totalDiagnoses) * 1000) / 10
-        : 0;
-
-      setStats({
-        totalDiagnoses,
-        activeDoctors: doctorsRes.count ?? 0,
-        totalPatients: patientsRes.count ?? 0,
-        totalReports: reportsRes.count ?? 0,
-        highRiskCases: highRiskRes.count ?? 0,
-        benignCases: benignRes.count ?? 0,
-        reviewedPct,
-        doctorActivity,
-        classificationBreakdown,
-      });
-      setLoading(false);
-    }
-
-    fetchStats();
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      const { count } = await supabase
+        .from("cases")
+        .select("*", { count: "exact", head: true })
+        .gte("created_at", startOfDay.toISOString());
+      setScansToday(count ?? 0);
+    };
+    load();
   }, []);
 
-  const fmt = (n: number) => n.toLocaleString();
-  const val = (n: number | undefined) => loading ? '—' : fmt(n ?? 0);
+  // MOCK: training + drift curves are seeded client-side.
+  const accCurve = useMemo(
+    () =>
+      toSeries(
+        seededCurve(40, 7, (i, r) =>
+          0.55 + 0.36 * (1 - Math.exp(-i / 12)) + (r - 0.5) * 0.02
+        )
+      ),
+    []
+  );
+  const lossCurve = useMemo(
+    () =>
+      toSeries(
+        seededCurve(40, 11, (i, r) => 1.8 * Math.exp(-i / 10) + 0.15 + (r - 0.5) * 0.05)
+      ),
+    []
+  );
+  const driftCurve = useMemo(
+    () =>
+      toSeries(
+        seededCurve(30, 3, (i, r) => 0.08 + (Math.sin(i / 3) + r * 0.5) * 0.03)
+      ),
+    []
+  );
+
+  // MOCK: per-class metrics
+  const perClass = ISIC_CLASSES.map((c, i) => ({
+    ...c,
+    precision: 0.82 + ((i * 7) % 15) / 100,
+    recall: 0.78 + ((i * 11) % 18) / 100,
+    f1: 0.8 + ((i * 5) % 13) / 100,
+    support: 100 + ((i * 47) % 300),
+  }));
+
+  const kpis = [
+    { label: "Balanced accuracy", value: "91.3%", delta: "+0.5pp vs prior", mock: true },
+    { label: "Macro F1", value: "0.894", delta: "+0.012", mock: true },
+    { label: "Inference p50", value: "342ms", delta: "−8ms", mock: true },
+    {
+      label: "Scans today",
+      value: scansToday == null ? "—" : scansToday.toLocaleString(),
+      delta: scansToday == null ? "loading…" : "live",
+      mock: false,
+    },
+  ];
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="mb-8">
-        <h1 className="text-gray-900 dark:text-white mb-2">
-          Doctor Activity and System Audit
-        </h1>
-        <p className="text-gray-600 dark:text-gray-400">
-          Monitor system performance, usage metrics, and compliance tracking
-        </p>
+    <div className="p-8 max-w-7xl mx-auto">
+      <PageHeader
+        title="Model metrics"
+        subtitle="Production: v3.2.1 · Staging: v3.3.0-rc1"
+        breadcrumb={["Admin", "Model metrics"]}
+        actions={
+          <>
+            <Select value={range} onValueChange={(v) => setRange(v as typeof range)}>
+              <SelectTrigger className="h-9 w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="24h">Last 24h</SelectItem>
+                <SelectItem value="7d">Last 7 days</SelectItem>
+                <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="all">All time</SelectItem>
+              </SelectContent>
+            </Select>
+            {/* MOCK: export action */}
+            <Button variant="outline">
+              <Download size={14} /> Export
+            </Button>
+            <Button variant="brand">
+              <Upload size={14} /> New model version
+            </Button>
+          </>
+        }
+      />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {kpis.map((k) => (
+          <div
+            key={k.label}
+            className="rounded-lg border border-border bg-card p-5"
+          >
+            <div className="text-xs text-muted-foreground uppercase tracking-wide mono mb-2">
+              {k.label}
+            </div>
+            <div className="text-3xl font-semibold tracking-tight mono">
+              {k.value}
+            </div>
+            <div
+              className="flex items-center gap-1 text-xs mt-3 pt-3 border-t border-border"
+              style={{
+                color: k.mock ? "hsl(var(--success))" : "hsl(var(--muted-foreground))",
+              }}
+            >
+              <TrendingUp size={12} /> {k.delta}
+            </div>
+          </div>
+        ))}
       </div>
 
-      {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-teal-100 dark:bg-teal-900/30 rounded-lg flex items-center justify-center">
-              <Activity className="h-6 w-6 text-teal-600 dark:text-teal-400" />
+      <div className="grid gap-5 mb-6 lg:grid-cols-2">
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="font-semibold">Training curves</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                v3.3.0-rc1 · 40 epochs
+              </p>
+            </div>
+            <div className="flex items-center gap-3 text-xs">
+              <span className="flex items-center gap-1.5">
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    background: "hsl(var(--brand))",
+                    borderRadius: 2,
+                  }}
+                />{" "}
+                Val acc
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    background: "hsl(var(--destructive))",
+                    borderRadius: 2,
+                  }}
+                />{" "}
+                Val loss
+              </span>
             </div>
           </div>
-          <p className="text-gray-600 dark:text-gray-400 text-sm mb-1">Total Diagnoses</p>
-          <p className="text-gray-900 dark:text-white">{val(stats?.totalDiagnoses)}</p>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
-              <Users className="h-6 w-6 text-blue-600 dark:text-blue-400" />
-            </div>
-          </div>
-          <p className="text-gray-600 dark:text-gray-400 text-sm mb-1">Active Doctors</p>
-          <p className="text-gray-900 dark:text-white">{val(stats?.activeDoctors)}</p>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-purple-100 dark:bg-purple-900/30 rounded-lg flex items-center justify-center">
-              <Award className="h-6 w-6 text-purple-600 dark:text-purple-400" />
-            </div>
-          </div>
-          <p className="text-gray-600 dark:text-gray-400 text-sm mb-1">Model Accuracy</p>
-          <p className="text-gray-900 dark:text-white">93.2%</p>
-        </div>
-
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-orange-100 dark:bg-orange-900/30 rounded-lg flex items-center justify-center">
-              <TrendingUp className="h-6 w-6 text-orange-600 dark:text-orange-400" />
-            </div>
-          </div>
-          <p className="text-gray-600 dark:text-gray-400 text-sm mb-1">Avg Inference Time</p>
-          <p className="text-gray-900 dark:text-white">4.5s</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {/* Model Performance Trends */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
-          <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-gray-900 dark:text-white">
-              Model Performance Trends
-            </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              Weekly F1-Score, Accuracy, and Precision metrics
-            </p>
-          </div>
-          <div className="p-6">
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={performanceData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.1} />
-                <XAxis
-                  dataKey="week"
-                  tick={{ fill: '#6B7280', fontSize: 12 }}
-                  stroke="#6B7280"
-                />
-                <YAxis
-                  domain={[0.85, 0.95]}
-                  tick={{ fill: '#6B7280', fontSize: 12 }}
-                  stroke="#6B7280"
-                />
+          <div className="h-[140px]">
+            <ResponsiveContainer>
+              <LineChart data={accCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
+                <XAxis dataKey="x" hide />
+                <YAxis domain={[0.5, 1]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: '#1F2937',
-                    border: '1px solid #374151',
-                    borderRadius: '8px',
-                    color: '#F3F4F6'
+                    background: "hsl(var(--popover))",
+                    border: "1px solid hsl(var(--border))",
+                    borderRadius: 8,
+                    fontSize: 12,
                   }}
                 />
-                <Legend wrapperStyle={{ fontSize: '12px' }} />
-                <Line type="monotone" dataKey="f1Score" stroke="#14B8A6" strokeWidth={2} name="F1-Score" dot={{ fill: '#14B8A6', r: 4 }} />
-                <Line type="monotone" dataKey="accuracy" stroke="#3B82F6" strokeWidth={2} name="Accuracy" dot={{ fill: '#3B82F6', r: 4 }} />
-                <Line type="monotone" dataKey="precision" stroke="#8B5CF6" strokeWidth={2} name="Precision" dot={{ fill: '#8B5CF6', r: 4 }} />
+                <Line type="monotone" dataKey="y" stroke="hsl(var(--brand))" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="h-[120px] mt-2">
+            <ResponsiveContainer>
+              <LineChart data={lossCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
+                <XAxis dataKey="x" hide />
+                <YAxis domain={[0, 2]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+                <Tooltip
+                  contentStyle={{
+                    background: "hsl(var(--popover))",
+                    border: "1px solid hsl(var(--border))",
+                    borderRadius: 8,
+                    fontSize: 12,
+                  }}
+                />
+                <Line type="monotone" dataKey="y" stroke="hsl(var(--destructive))" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        {/* Doctor Activity Metrics */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
-          <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-gray-900 dark:text-white">
-              Doctor Activity Metrics
-            </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              Diagnoses performed per doctor (last 30 days)
-            </p>
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="font-semibold">ROC curves (one-vs-rest)</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Macro AUC: <span className="mono font-medium">0.964</span>
+              </p>
+            </div>
           </div>
-          <div className="p-6">
-            {!loading && stats?.doctorActivity.length === 0 ? (
-              <div className="h-[300px] flex items-center justify-center text-gray-400 text-sm">No data yet</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={loading ? [] : stats?.doctorActivity}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.1} />
-                  <XAxis
-                    dataKey="doctor"
-                    tick={{ fill: '#6B7280', fontSize: 12 }}
-                    stroke="#6B7280"
-                    angle={-45}
-                    textAnchor="end"
-                    height={80}
-                  />
-                  <YAxis tick={{ fill: '#6B7280', fontSize: 12 }} stroke="#6B7280" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#1F2937',
-                      border: '1px solid #374151',
-                      borderRadius: '8px',
-                      color: '#F3F4F6'
-                    }}
-                  />
-                  <Bar dataKey="diagnoses" fill="#14B8A6" name="Diagnoses" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
+          <svg width="100%" height="220" viewBox="0 0 480 220">
+            <line x1="36" y1="196" x2="470" y2="196" stroke="hsl(var(--border))" />
+            <line x1="36" y1="10" x2="36" y2="196" stroke="hsl(var(--border))" />
+            <line
+              x1="36"
+              y1="196"
+              x2="470"
+              y2="10"
+              stroke="hsl(var(--muted-foreground))"
+              strokeDasharray="3 3"
+              opacity="0.5"
+            />
+            {ISIC_CLASSES.map((c, ci) => {
+              const points = Array.from({ length: 40 }, (_, i) => {
+                const x = i / 39;
+                const y = Math.min(1, Math.pow(x, 0.12 + ci * 0.02));
+                return `${36 + x * 434},${196 - y * 186}`;
+              }).join(" ");
+              return (
+                <polyline
+                  key={c.code}
+                  points={points}
+                  fill="none"
+                  stroke={c.color}
+                  strokeWidth="1.5"
+                  opacity="0.85"
+                />
+              );
+            })}
+            <text
+              x="252"
+              y="214"
+              fontSize="10"
+              fill="hsl(var(--muted-foreground))"
+              textAnchor="middle"
+              className="mono"
+            >
+              False Positive Rate
+            </text>
+          </svg>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
+            {ISIC_CLASSES.map((c) => (
+              <span key={c.code} className="flex items-center gap-1.5 text-xs">
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    background: c.color,
+                    borderRadius: 2,
+                  }}
+                />{" "}
+                {c.code}
+              </span>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* Classification Breakdown and System Usage */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Classification Breakdown */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
-          <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-gray-900 dark:text-white">
-              Classification Distribution
-            </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              Breakdown by lesion type (last 30 days)
-            </p>
+      <div className="grid gap-5 mb-6 lg:grid-cols-[1.2fr_1fr]">
+        <div className="rounded-lg border border-border bg-card p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="font-semibold">Confusion matrix</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Validation set · 4,312 samples · row-normalized %
+              </p>
+            </div>
           </div>
-          <div className="p-6">
-            {!loading && stats?.classificationBreakdown.length === 0 ? (
-              <div className="h-[300px] flex items-center justify-center text-gray-400 text-sm">No data yet</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={loading ? [] : stats?.classificationBreakdown} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.1} />
-                  <XAxis type="number" tick={{ fill: '#6B7280', fontSize: 12 }} stroke="#6B7280" />
-                  <YAxis
-                    dataKey="class"
-                    type="category"
-                    tick={{ fill: '#6B7280', fontSize: 11 }}
-                    stroke="#6B7280"
-                    width={120}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#1F2937',
-                      border: '1px solid #374151',
-                      borderRadius: '8px',
-                      color: '#F3F4F6'
-                    }}
-                  />
-                  <Bar dataKey="count" fill="#3B82F6" name="Count" radius={[0, 8, 8, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: `60px repeat(8, 1fr)`,
+              gap: 2,
+            }}
+          >
+            <div />
+            {CM_CLASSES.map((c) => (
+              <div
+                key={c}
+                className="text-xs mono text-muted-foreground text-center py-1"
+              >
+                {c}
+              </div>
+            ))}
+            {CM_MAT.map((row, i) => (
+              <div key={i} style={{ display: "contents" }}>
+                <div className="text-xs mono text-muted-foreground flex items-center justify-end pr-2">
+                  {CM_CLASSES[i]}
+                </div>
+                {row.map((v, j) => {
+                  const total = row.reduce((a, b) => a + b, 0);
+                  const pct = total > 0 ? v / total : 0;
+                  const intensity = Math.min(1, pct * 1.2);
+                  return (
+                    <div
+                      key={j}
+                      className="mono text-xs flex items-center justify-center rounded"
+                      style={{
+                        aspectRatio: 1,
+                        background: `oklch(${0.95 - intensity * 0.55} ${0.02 + intensity * 0.13} 200 / ${0.15 + intensity * 0.85})`,
+                        color:
+                          intensity > 0.5
+                            ? "white"
+                            : "hsl(var(--foreground))",
+                        fontSize: 10,
+                        fontWeight: i === j ? 600 : 400,
+                      }}
+                    >
+                      {Math.round(pct * 100)}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between mt-4 text-xs text-muted-foreground">
+            <span>True class ↓ · Predicted class →</span>
+            <div className="flex items-center gap-1">
+              <span className="mono">0%</span>
+              <div
+                style={{
+                  width: 120,
+                  height: 8,
+                  borderRadius: 4,
+                  background:
+                    "linear-gradient(90deg, oklch(0.95 0.02 200 / 0.15), oklch(0.4 0.15 200))",
+                }}
+              />
+              <span className="mono">100%</span>
+            </div>
           </div>
         </div>
 
-        {/* System Usage Stats */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
-          <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-gray-900 dark:text-white">
-              System Usage Statistics
-            </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              Total system counts and compliance metrics
+        <div className="flex flex-col gap-5">
+          <div className="rounded-lg border border-border bg-card p-5">
+            <h3 className="font-semibold mb-1">Inference latency</h3>
+            <p className="text-xs text-muted-foreground mb-4">
+              p50 / p95 / p99 over 7 days
             </p>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { l: "p50", v: "342ms" },
+                { l: "p95", v: "486ms" },
+                { l: "p99", v: "712ms" },
+              ].map((s) => (
+                <div
+                  key={s.l}
+                  className="text-center p-3 rounded"
+                  style={{ background: "hsl(var(--muted) / 0.5)" }}
+                >
+                  <div className="text-xs text-muted-foreground mb-1 mono">
+                    {s.l}
+                  </div>
+                  <div className="text-xl font-semibold mono">{s.v}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 pt-4 border-t border-border flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Throughput</span>
+              <span className="mono font-medium">
+                2,840 req/hr · 98.2% SLO
+              </span>
+            </div>
           </div>
-          <div className="p-6 space-y-6">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Patients</p>
-                <p className="text-gray-900 dark:text-white">{val(stats?.totalPatients)}</p>
-              </div>
-              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Reports</p>
-                <p className="text-gray-900 dark:text-white">{val(stats?.totalReports)}</p>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">High Risk Cases</p>
-                <p className="text-red-600 dark:text-red-400">{val(stats?.highRiskCases)}</p>
-              </div>
-              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Benign Cases</p>
-                <p className="text-green-600 dark:text-green-400">{val(stats?.benignCases)}</p>
-              </div>
+          <div className="rounded-lg border border-border bg-card p-5">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-semibold">Drift monitor</h3>
+              <Badge
+                variant="outline"
+                className="gap-1 border-success/40 text-success"
+              >
+                <CheckCircle2 size={10} /> Stable
+              </Badge>
             </div>
+            <p className="text-xs text-muted-foreground mb-3">
+              Feature distribution divergence (PSI) vs training set
+            </p>
+            <div className="h-[100px]">
+              <ResponsiveContainer>
+                <LineChart data={driftCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <YAxis domain={[0, 0.25]} hide />
+                  <XAxis dataKey="x" hide />
+                  <Line
+                    type="monotone"
+                    dataKey="y"
+                    stroke="hsl(var(--brand))"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex items-center justify-between mt-2 text-xs">
+              <span className="mono text-muted-foreground">
+                Current PSI: 0.11
+              </span>
+              <span className="mono text-muted-foreground">
+                Threshold: 0.20
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
 
-            <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-              <h3 className="text-sm text-gray-900 dark:text-white mb-3">
-                Compliance Metrics
-              </h3>
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-center justify-between text-sm mb-1">
-                    <span className="text-gray-600 dark:text-gray-400">Reports Reviewed</span>
-                    <span className="text-gray-900 dark:text-white">
-                      {loading ? '—' : `${stats?.reviewedPct ?? 0}%`}
+      <div className="rounded-lg border border-border bg-card">
+        <div className="p-5 border-b border-border">
+          <h3 className="font-semibold">Per-class performance</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            ISIC 2019 · 8 classes · balanced evaluation
+          </p>
+        </div>
+        <table className="w-full">
+          <thead>
+            <tr className="border-b border-border">
+              {["Class", "Precision", "Recall", "F1", "Support", ""].map(
+                (h) => (
+                  <th
+                    key={h}
+                    className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wide px-5 py-3"
+                  >
+                    {h}
+                  </th>
+                )
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {perClass.map((c) => (
+              <tr key={c.code} className="border-b border-border last:border-0">
+                <td className="px-5 py-3">
+                  <div className="flex items-center gap-2">
+                    <div
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 2,
+                        background: c.color,
+                      }}
+                    />
+                    <span className="font-medium text-sm">{c.name}</span>
+                    <span className="mono text-xs text-muted-foreground">
+                      {c.code}
                     </span>
                   </div>
-                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                </td>
+                <td className="px-5 py-3 mono text-sm">
+                  {c.precision.toFixed(3)}
+                </td>
+                <td className="px-5 py-3 mono text-sm">
+                  {c.recall.toFixed(3)}
+                </td>
+                <td className="px-5 py-3 mono text-sm">{c.f1.toFixed(3)}</td>
+                <td className="px-5 py-3 mono text-sm text-muted-foreground">
+                  {c.support}
+                </td>
+                <td className="px-5 py-3">
+                  <div
+                    style={{
+                      width: 120,
+                      height: 6,
+                      background: "hsl(var(--muted))",
+                      borderRadius: 3,
+                    }}
+                  >
                     <div
-                      className="bg-teal-500 h-2 rounded-full transition-all duration-500"
-                      style={{ width: loading ? '0%' : `${stats?.reviewedPct ?? 0}%` }}
+                      style={{
+                        width: `${c.f1 * 100}%`,
+                        height: "100%",
+                        background: c.color,
+                        borderRadius: 3,
+                      }}
                     />
                   </div>
-                </div>
-                <div>
-                  <div className="flex items-center justify-between text-sm mb-1">
-                    <span className="text-gray-600 dark:text-gray-400">Follow-up Documented</span>
-                    <span className="text-gray-900 dark:text-white">94.2%</span>
-                  </div>
-                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                    <div className="bg-blue-500 h-2 rounded-full" style={{ width: '94.2%' }} />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex items-center justify-between text-sm mb-1">
-                    <span className="text-gray-600 dark:text-gray-400">Audit Trail Complete</span>
-                    <span className="text-gray-900 dark:text-white">100%</span>
-                  </div>
-                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                    <div className="bg-green-500 h-2 rounded-full" style={{ width: '100%' }} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
