@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface PatientRecord {
   patientDbId: string;
@@ -193,8 +194,17 @@ export function PatientRecords() {
 
         <div className="overflow-x-auto">
           {loading ? (
-            <div className="p-12 text-center text-muted-foreground">
-              Loading records…
+            <div className="p-5 space-y-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <Skeleton className="h-8 w-8 rounded-full" />
+                  <Skeleton className="h-4 w-40" />
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-4 w-16" />
+                  <Skeleton className="h-4 flex-1" />
+                  <Skeleton className="h-5 w-16 rounded" />
+                </div>
+              ))}
             </div>
           ) : paginated.length === 0 ? (
             <div className="p-12 text-center">
