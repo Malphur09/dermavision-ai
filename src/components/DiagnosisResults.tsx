@@ -38,6 +38,7 @@ interface CaseSession {
   riskLevel: string;
   lesionSite: string;
   storagePath: string;
+  heatmapDataUrl: string | null;
 }
 
 export function DiagnosisResults() {
@@ -45,14 +46,21 @@ export function DiagnosisResults() {
   const [caseData, setCaseData] = useState<CaseSession | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [loadingImage, setLoadingImage] = useState(true);
+  const [heatmapDataUrl, setHeatmapDataUrl] = useState<string | null>(null);
+  const [heatmapPending, setHeatmapPending] = useState(true);
 
   useEffect(() => {
     const raw = sessionStorage.getItem('lastCase');
-    if (!raw) { setLoadingImage(false); return; }
+    if (!raw) { setLoadingImage(false); setHeatmapPending(false); return; }
 
     let parsed: CaseSession;
-    try { parsed = JSON.parse(raw); } catch { setLoadingImage(false); return; }
+    try { parsed = JSON.parse(raw); } catch { setLoadingImage(false); setHeatmapPending(false); return; }
     setCaseData(parsed);
+
+    if (parsed.heatmapDataUrl) {
+      setHeatmapDataUrl(parsed.heatmapDataUrl);
+      setHeatmapPending(false);
+    }
 
     const supabase = createClient();
     supabase.storage
@@ -61,6 +69,22 @@ export function DiagnosisResults() {
       .then(({ data }) => { if (data?.signedUrl) setImageUrl(data.signedUrl); })
       .finally(() => setLoadingImage(false));
   }, []);
+
+  useEffect(() => {
+    if (!heatmapPending) return;
+    const interval = setInterval(() => {
+      const raw = sessionStorage.getItem('lastCase');
+      if (!raw) { clearInterval(interval); setHeatmapPending(false); return; }
+      const parsed = JSON.parse(raw) as CaseSession;
+      if (parsed.heatmapDataUrl) {
+        setHeatmapDataUrl(parsed.heatmapDataUrl);
+        setHeatmapPending(false);
+        clearInterval(interval);
+      }
+    }, 500);
+    const timeout = setTimeout(() => { clearInterval(interval); setHeatmapPending(false); }, 30_000);
+    return () => { clearInterval(interval); clearTimeout(timeout); };
+  }, [heatmapPending]);
 
   if (!caseData) {
     return (
@@ -91,30 +115,38 @@ export function DiagnosisResults() {
   const clinicalNote = CLINICAL_NOTES[caseData.predictedClass] ?? 'Clinical correlation recommended.';
   const isHighRisk = caseData.riskLevel === 'High Risk';
 
-  const ImageSlot = ({ label, pending }: { label: string; pending?: boolean }) => (
+  const ImageSlot = ({
+    label,
+    src,
+    pending,
+    unavailable,
+  }: {
+    label: string;
+    src?: string | null;
+    pending?: boolean;
+    unavailable?: boolean;
+  }) => (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
       <h3 className="text-gray-900 dark:text-white mb-4">{label}</h3>
       <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden relative flex items-center justify-center">
-        {loadingImage ? (
-          <span className="text-gray-400 text-sm">Loading...</span>
-        ) : imageUrl ? (
-          <img
-            src={imageUrl}
-            alt={label}
-            className={`w-full h-full object-cover${pending ? ' opacity-70' : ''}`}
-          />
+        {pending ? (
+          <span className="text-gray-400 text-sm">Generating...</span>
+        ) : src ? (
+          <img src={src} alt={label} className="w-full h-full object-cover" />
         ) : (
-          <span className="text-gray-400 text-sm">Image unavailable</span>
+          <span className="text-gray-400 text-sm">
+            {unavailable ? 'Grad-CAM unavailable' : 'Image unavailable'}
+          </span>
         )}
         {pending && (
           <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-            Pending
+            Generating
           </div>
         )}
       </div>
-      {pending && (
+      {(pending || src) && (
         <div className="mt-4 flex items-center space-x-2 text-xs">
-          <div className="w-8 h-3 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-500 rounded"></div>
+          <div className="w-8 h-3 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-500 rounded" />
           <span className="text-gray-600 dark:text-gray-400">Low → High Activation</span>
         </div>
       )}
@@ -134,8 +166,13 @@ export function DiagnosisResults() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         <div className="lg:col-span-1 space-y-6">
-          <ImageSlot label="Original Image" />
-          <ImageSlot label="Grad-CAM Visualization" pending />
+          <ImageSlot label="Original Image" src={loadingImage ? null : imageUrl} pending={loadingImage} />
+          <ImageSlot
+            label="Grad-CAM Visualization"
+            src={heatmapDataUrl}
+            pending={heatmapPending}
+            unavailable={!heatmapPending && !heatmapDataUrl}
+          />
         </div>
 
         <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">

@@ -3,5 +3,8 @@ flask-cors
 gunicorn
 python-dotenv
 pillow
-onnxruntime
 numpy
+onnx>=1.16,<2
+onnx2torch>=1.5,<2
+torch>=2.2,<3
+grad-cam>=1.5,<2

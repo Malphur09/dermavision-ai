@@ -230,11 +230,32 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
       riskLevel,
       lesionSite,
       storagePath,
+      heatmapDataUrl: null,
     }));
 
     toast.success('Classification complete! Viewing results...');
     setIsProcessing(false);
     onNavigateToResults();
+
+    // 6. Fire Grad-CAM in background — non-blocking, results page polls for it
+    void (async () => {
+      try {
+        const camForm = new FormData();
+        camForm.append('file', uploadedFile);
+        const camRes = await fetch('/api/gradcam', { method: 'POST', body: camForm });
+        if (!camRes.ok) return;
+        const camData: { heatmap: string | null } = await camRes.json();
+        if (camData.heatmap) {
+          const stored = sessionStorage.getItem('lastCase');
+          if (stored) {
+            sessionStorage.setItem('lastCase', JSON.stringify({
+              ...JSON.parse(stored),
+              heatmapDataUrl: camData.heatmap,
+            }));
+          }
+        }
+      } catch { /* silent — results page shows unavailable */ }
+    })();
   };
 
   return (
