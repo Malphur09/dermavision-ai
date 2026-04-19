@@ -18,7 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { LogoWord } from "@/components/primitives/Logo";
 
 interface AuthScreenProps {
-  onLogin: (role: "doctor" | "admin") => void;
+  onLogin: () => void;
 }
 
 type Mode = "login" | "signup";
@@ -90,7 +90,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
           return;
         }
         toast.success("Account created. Welcome!");
-        onLogin("doctor");
+        onLogin();
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email,
@@ -102,7 +102,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
           return;
         }
         toast.success("Welcome back!");
-        onLogin("doctor");
+        onLogin();
       }
     } catch (err) {
       console.error("Auth error:", err);

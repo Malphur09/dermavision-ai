@@ -4,11 +4,5 @@ import { AuthScreen } from "@/components/AuthScreen";
 
 export default function LoginPage() {
   const router = useRouter();
-  return (
-    <AuthScreen
-      onLogin={(role) =>
-        router.push(role === "admin" ? "/admin" : "/diagnostic")
-      }
-    />
-  );
+  return <AuthScreen onLogin={() => router.push("/")} />;
 }
