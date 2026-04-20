@@ -12,12 +12,7 @@ import {
 
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import {
-  ISIC_CLASSES,
-  PATIENTS_SEED,
-  RECENT_SCANS,
-  type RiskBucket,
-} from "@/lib/mock-data";
+import { ISIC_CLASSES, type RiskBucket } from "@/lib/mock-data";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";
@@ -40,35 +35,161 @@ const RISK_META: Record<RiskBucket, { label: string; bg: string; color: string }
   },
 };
 
+const RISK_FROM_LEVEL: Record<string, RiskBucket> = {
+  "High Risk": "high",
+  "Moderate Risk": "med",
+  Benign: "low",
+};
+
 interface Stats {
   scansToday: number | null;
   activePatients: number | null;
+  pendingReview: number | null;
+  pendingUrgent: number | null;
+}
+
+interface RecentRow {
+  id: string;
+  created_at: string;
+  predicted_class: string | null;
+  confidence: number | null;
+  risk_level: string | null;
+  patient_name: string;
+  patient_code: string;
+}
+
+interface UrgentRow {
+  id: string;
+  predicted_class: string | null;
+  patient_id: string;
+  patient_name: string;
+  patient_code: string;
+}
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d === 1) return "yesterday";
+  if (d < 7) return `${d}d ago`;
+  return new Date(iso).toISOString().slice(0, 10);
 }
 
 export function DoctorDashboard() {
   const router = useRouter();
   const { user } = useAuth();
-  const [stats, setStats] = useState<Stats>({ scansToday: null, activePatients: null });
+  const [stats, setStats] = useState<Stats>({
+    scansToday: null,
+    activePatients: null,
+    pendingReview: null,
+    pendingUrgent: null,
+  });
+  const [recent, setRecent] = useState<RecentRow[] | null>(null);
+  const [urgent, setUrgent] = useState<UrgentRow[] | null>(null);
 
   useEffect(() => {
+    if (!user) return;
     const load = async () => {
       const supabase = createClient();
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
-      const [todayRes, patientsRes] = await Promise.all([
+
+      const [
+        todayRes,
+        patientsRes,
+        pendingRes,
+        pendingUrgentRes,
+        recentRes,
+        urgentRes,
+      ] = await Promise.all([
         supabase
           .from("cases")
           .select("*", { count: "exact", head: true })
+          .eq("doctor_id", user.id)
           .gte("created_at", startOfDay.toISOString()),
         supabase.from("patients").select("*", { count: "exact", head: true }),
+        supabase
+          .from("cases")
+          .select("*", { count: "exact", head: true })
+          .eq("doctor_id", user.id)
+          .eq("status", "pending"),
+        supabase
+          .from("cases")
+          .select("*", { count: "exact", head: true })
+          .eq("doctor_id", user.id)
+          .eq("status", "pending")
+          .eq("risk_level", "High Risk"),
+        supabase
+          .from("cases")
+          .select(
+            "id, created_at, predicted_class, confidence, risk_level, patients ( name, patient_id )"
+          )
+          .eq("doctor_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(5),
+        supabase
+          .from("cases")
+          .select(
+            "id, predicted_class, patient_id, patients ( name, patient_id )"
+          )
+          .eq("doctor_id", user.id)
+          .eq("risk_level", "High Risk")
+          .order("created_at", { ascending: false })
+          .limit(3),
       ]);
+
       setStats({
         scansToday: todayRes.count ?? 0,
         activePatients: patientsRes.count ?? 0,
+        pendingReview: pendingRes.count ?? 0,
+        pendingUrgent: pendingUrgentRes.count ?? 0,
       });
+
+      type CaseJoin = {
+        id: string;
+        created_at: string;
+        predicted_class: string | null;
+        confidence: number | null;
+        risk_level: string | null;
+        patients: { name: string | null; patient_id: string | null } | null;
+      };
+      type UrgentJoin = {
+        id: string;
+        predicted_class: string | null;
+        patient_id: string;
+        patients: { name: string | null; patient_id: string | null } | null;
+      };
+
+      const recentRows: RecentRow[] = ((recentRes.data ?? []) as unknown as CaseJoin[]).map(
+        (r) => ({
+          id: r.id,
+          created_at: r.created_at,
+          predicted_class: r.predicted_class,
+          confidence: r.confidence,
+          risk_level: r.risk_level,
+          patient_name: r.patients?.name ?? "—",
+          patient_code: r.patients?.patient_id ?? "—",
+        })
+      );
+      setRecent(recentRows);
+
+      const urgentRows: UrgentRow[] = ((urgentRes.data ?? []) as unknown as UrgentJoin[]).map(
+        (r) => ({
+          id: r.id,
+          predicted_class: r.predicted_class,
+          patient_id: r.patient_id,
+          patient_name: r.patients?.name ?? "—",
+          patient_code: r.patients?.patient_id ?? "—",
+        })
+      );
+      setUrgent(urgentRows);
     };
     load();
-  }, []);
+  }, [user]);
 
   const greeting = useMemo(() => {
     const h = new Date().getHours();
@@ -99,11 +220,14 @@ export function DoctorDashboard() {
     },
     {
       label: "Pending review",
-      value: "4",
-      delta: "2 urgent",
+      value: stats.pendingReview == null ? "—" : String(stats.pendingReview),
+      delta:
+        stats.pendingUrgent == null
+          ? "live"
+          : `${stats.pendingUrgent} urgent`,
       icon: Clock,
-      warn: true,
-      mock: true,
+      warn: (stats.pendingUrgent ?? 0) > 0,
+      mock: false,
     },
     {
       label: "Active patients",
@@ -147,8 +271,13 @@ export function DoctorDashboard() {
           return (
             <div
               key={c.label}
-              className="rounded-lg border border-border bg-card p-5"
+              className="rounded-lg border border-border bg-card p-5 relative"
             >
+              {c.mock && (
+                <span className="absolute top-3 right-3 text-[10px] uppercase tracking-wide mono rounded px-1.5 py-0.5 border border-border text-muted-foreground">
+                  mock
+                </span>
+              )}
               <div className="flex items-center justify-between mb-3">
                 <div
                   className="p-2 rounded-md"
@@ -197,57 +326,75 @@ export function DoctorDashboard() {
             </button>
           </div>
           <div>
-            {/* MOCK: replace with live cases query ordered by created_at desc */}
-            {RECENT_SCANS.slice(0, 5).map((s) => {
-              const cls = ISIC_CLASSES.find((c) => c.code === s.topClass);
-              const risk = RISK_META[s.risk];
-              return (
-                <div
-                  key={s.id}
-                  className="flex items-center gap-4 px-5 py-3 border-b border-border last:border-0 hover:bg-muted/40 transition cursor-pointer"
-                  onClick={() => router.push("/results")}
-                >
+            {recent == null ? (
+              <div className="p-8 text-center text-muted-foreground text-sm">
+                Loading scans…
+              </div>
+            ) : recent.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground text-sm">
+                No scans yet — start a new one from the diagnostic page.
+              </div>
+            ) : (
+              recent.map((s) => {
+                const cls = s.predicted_class
+                  ? ISIC_CLASSES.find((c) => c.full === s.predicted_class)
+                  : null;
+                const riskBucket = s.risk_level
+                  ? RISK_FROM_LEVEL[s.risk_level] ?? null
+                  : null;
+                const risk = riskBucket ? RISK_META[riskBucket] : null;
+                return (
                   <div
-                    className="rounded-md"
-                    style={{
-                      width: 44,
-                      height: 44,
-                      background:
-                        "radial-gradient(circle at 30% 30%, oklch(0.75 0.1 40), oklch(0.35 0.12 30))",
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">
-                      {s.patient}
-                    </div>
-                    <div className="text-xs text-muted-foreground mono">
-                      {s.id} · {s.patientId}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-medium">
-                      {cls?.name ?? s.topClass}
-                    </div>
-                    <div className="text-xs text-muted-foreground mono">
-                      {(s.conf * 100).toFixed(1)}% conf
-                    </div>
-                  </div>
-                  <span
-                    className="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
-                    style={{
-                      background: risk.bg,
-                      color: risk.color,
-                      border: `1px solid ${risk.color}33`,
-                    }}
+                    key={s.id}
+                    className="flex items-center gap-4 px-5 py-3 border-b border-border last:border-0 hover:bg-muted/40 transition cursor-pointer"
+                    onClick={() => router.push("/results")}
                   >
-                    {risk.label}
-                  </span>
-                  <div className="text-xs text-muted-foreground w-[70px] text-right">
-                    {s.when}
+                    <div
+                      className="rounded-md"
+                      style={{
+                        width: 44,
+                        height: 44,
+                        background:
+                          "radial-gradient(circle at 30% 30%, oklch(0.75 0.1 40), oklch(0.35 0.12 30))",
+                      }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {s.patient_name}
+                      </div>
+                      <div className="text-xs text-muted-foreground mono">
+                        {s.id.slice(0, 8)} · {s.patient_code}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-medium">
+                        {cls?.name ?? s.predicted_class ?? "—"}
+                      </div>
+                      <div className="text-xs text-muted-foreground mono">
+                        {s.confidence != null
+                          ? `${(Number(s.confidence) * 100).toFixed(1)}% conf`
+                          : "—"}
+                      </div>
+                    </div>
+                    {risk && (
+                      <span
+                        className="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
+                        style={{
+                          background: risk.bg,
+                          color: risk.color,
+                          border: `1px solid ${risk.color}33`,
+                        }}
+                      >
+                        {risk.label}
+                      </span>
+                    )}
+                    <div className="text-xs text-muted-foreground w-[80px] text-right">
+                      {timeAgo(s.created_at)}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -256,23 +403,31 @@ export function DoctorDashboard() {
           <p className="text-xs text-muted-foreground mb-4">
             High-risk predictions awaiting review
           </p>
-          {/* MOCK: seed patients — swap for cases.risk_level = 'High Risk' + patient join */}
-          {PATIENTS_SEED.filter((p) => p.risk === "high")
-            .slice(0, 3)
-            .map((p) => {
-              const cls = ISIC_CLASSES.find((c) => c.code === p.topClass);
+          {urgent == null ? (
+            <div className="py-6 text-center text-muted-foreground text-sm">
+              Loading…
+            </div>
+          ) : urgent.length === 0 ? (
+            <div className="py-6 text-center text-muted-foreground text-sm">
+              No urgent follow-ups.
+            </div>
+          ) : (
+            urgent.map((p) => {
+              const cls = p.predicted_class
+                ? ISIC_CLASSES.find((c) => c.full === p.predicted_class)
+                : null;
               return (
                 <div
                   key={p.id}
                   className="flex items-center gap-3 py-3 border-b border-border last:border-0"
                 >
-                  <Avatar name={p.name} size={32} />
+                  <Avatar name={p.patient_name} size={32} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">
-                      {p.name}
+                      {p.patient_name}
                     </div>
                     <div className="text-xs text-muted-foreground mono truncate">
-                      {p.id} · {cls?.name ?? p.topClass}
+                      {p.patient_code} · {cls?.name ?? p.predicted_class ?? "—"}
                     </div>
                   </div>
                   <Button
@@ -284,7 +439,8 @@ export function DoctorDashboard() {
                   </Button>
                 </div>
               );
-            })}
+            })
+          )}
         </div>
       </div>
     </div>

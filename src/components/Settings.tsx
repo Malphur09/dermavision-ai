@@ -48,18 +48,19 @@ export function Settings() {
   const [pwErrors, setPwErrors] = useState<Record<string, string>>({});
   const [changingPw, setChangingPw] = useState(false);
 
-  // MOCK: notification + clinic state — no persistence
   const [notifications, setNotifications] = useState({
     urgent: true,
     newResults: true,
     weeklyDigest: false,
     modelUpdates: true,
   });
+  const [savingNotifications, setSavingNotifications] = useState(false);
   const [clinic, setClinic] = useState({
     name: "",
     taxId: "",
     address: "",
   });
+  const [savingClinic, setSavingClinic] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -67,7 +68,9 @@ export function Settings() {
     const supabase = createClient();
     supabase
       .from("user_details")
-      .select("full_name, specialty, license, phone")
+      .select(
+        "full_name, specialty, license, phone, clinic_name, clinic_tax_id, clinic_address, notification_prefs"
+      )
       .eq("id", user.id)
       .maybeSingle()
       .then(({ data }) => {
@@ -76,6 +79,20 @@ export function Settings() {
           setSpecialty(data.specialty ?? "");
           setLicense(data.license ?? "");
           setPhone(data.phone ?? "");
+          setClinic({
+            name: data.clinic_name ?? "",
+            taxId: data.clinic_tax_id ?? "",
+            address: data.clinic_address ?? "",
+          });
+          if (data.notification_prefs) {
+            const n = data.notification_prefs as Record<string, unknown>;
+            setNotifications({
+              urgent: n.urgent !== false,
+              newResults: n.newResults !== false,
+              weeklyDigest: n.weeklyDigest === true,
+              modelUpdates: n.modelUpdates !== false,
+            });
+          }
         }
         setLoadingDetails(false);
       });
@@ -147,6 +164,34 @@ export function Settings() {
       setConfirmPassword("");
     }
     setChangingPw(false);
+  };
+
+  const saveNotifications = async () => {
+    if (!user) return;
+    setSavingNotifications(true);
+    const supabase = createClient();
+    const { error } = await supabase.from("user_details").upsert({
+      id: user.id,
+      notification_prefs: notifications,
+    });
+    if (error) toast.error("Failed to save preferences");
+    else toast.success("Notification preferences saved");
+    setSavingNotifications(false);
+  };
+
+  const saveClinic = async () => {
+    if (!user) return;
+    setSavingClinic(true);
+    const supabase = createClient();
+    const { error } = await supabase.from("user_details").upsert({
+      id: user.id,
+      clinic_name: clinic.name.trim() || null,
+      clinic_tax_id: clinic.taxId.trim() || null,
+      clinic_address: clinic.address.trim() || null,
+    });
+    if (error) toast.error("Failed to save clinic");
+    else toast.success("Clinic details saved");
+    setSavingClinic(false);
   };
 
   const displayName = fullName || user?.email?.split("@")[0] || "User";
@@ -389,7 +434,6 @@ export function Settings() {
 
         <TabsContent value="notifications" className="mt-5">
           <div className="rounded-lg border border-border bg-card p-6 flex flex-col gap-2">
-            {/* MOCK: notification toggles — no persistence */}
             {[
               {
                 key: "urgent",
@@ -431,12 +475,21 @@ export function Settings() {
                 </label>
               );
             })}
+            <div className="pt-2">
+              <Button
+                variant="brand"
+                onClick={saveNotifications}
+                disabled={savingNotifications}
+              >
+                <Save size={14} />{" "}
+                {savingNotifications ? "Saving…" : "Save preferences"}
+              </Button>
+            </div>
           </div>
         </TabsContent>
 
         <TabsContent value="clinic" className="mt-5">
           <div className="rounded-lg border border-border bg-card p-6 flex flex-col gap-4">
-            {/* MOCK: clinic fields — no persistence */}
             <div>
               <Label htmlFor="cn" className="mb-1.5 block">
                 Clinic name
@@ -470,12 +523,13 @@ export function Settings() {
               />
             </div>
             <div>
-              <Button variant="brand" disabled>
-                Save clinic
+              <Button
+                variant="brand"
+                onClick={saveClinic}
+                disabled={savingClinic}
+              >
+                <Save size={14} /> {savingClinic ? "Saving…" : "Save clinic"}
               </Button>
-              <p className="text-xs text-muted-foreground mt-2">
-                {/* MOCK */}Clinic management is mocked; backend persistence pending.
-              </p>
             </div>
           </div>
         </TabsContent>

@@ -30,15 +30,16 @@ interface UserRow {
   role: string;
   email: string;
   last_sign_in_at: string | null;
+  created_at: string;
   full_name: string | null;
+  scans_count: number;
 }
 
 type Status = "active" | "pending" | "suspended";
 
 interface AugmentedUser extends UserRow {
   status: Status;
-  scans: number; // MOCK
-  joined: string; // MOCK
+  joined: string;
 }
 
 const STATUS_STYLE: Record<Status, { bg: string; color: string }> = {
@@ -56,15 +57,10 @@ const STATUS_STYLE: Record<Status, { bg: string; color: string }> = {
   },
 };
 
-// MOCK: until we have real status + scans + joined from backend
 function augment(u: UserRow): AugmentedUser {
   const status: Status = u.last_sign_in_at ? "active" : "pending";
-  const seed = u.id.charCodeAt(0) + u.id.charCodeAt(u.id.length - 1);
-  const joinedDaysAgo = 30 + (seed % 400);
-  const joined = new Date(Date.now() - joinedDaysAgo * 86400000)
-    .toISOString()
-    .slice(0, 10);
-  return { ...u, status, scans: (seed * 13) % 250, joined };
+  const joined = u.created_at ? u.created_at.slice(0, 10) : "—";
+  return { ...u, status, joined };
 }
 
 function timeSince(iso: string | null): string {
@@ -235,7 +231,7 @@ export function AdminManagement() {
                           {u.status}
                         </span>
                       </td>
-                      <td className="px-5 py-3 mono text-sm">{u.scans}</td>
+                      <td className="px-5 py-3 mono text-sm">{u.scans_count}</td>
                       <td className="px-5 py-3 text-sm text-muted-foreground mono">
                         {u.joined}
                       </td>

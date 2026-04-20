@@ -320,6 +320,9 @@ export function ReportGeneration() {
                   : `Generate ${format.toUpperCase()}`}
               </Button>
             </div>
+            <p className="text-[11px] text-muted-foreground mt-3">
+              Preview only — server-side PDF export coming in a later release.
+            </p>
           </div>
         </div>
       </div>

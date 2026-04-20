@@ -1,15 +1,12 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, FileText, Filter, Search } from "lucide-react";
+import { toast } from "sonner";
 
-import {
-  ISIC_CLASSES,
-  PATIENTS_SEED,
-  type RiskBucket,
-} from "@/lib/mock-data";
+import { createClient } from "@/lib/supabase/client";
+import { ISIC_CLASSES, type RiskBucket } from "@/lib/mock-data";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Avatar } from "@/components/primitives/Avatar";
-import { Alert } from "@/components/primitives/Alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -31,33 +28,148 @@ const RISK_META: Record<RiskBucket, { label: string; bg: string; color: string }
   },
 };
 
-const MOCK_CLINICIANS = [
-  "Dr. Elena Voss",
-  "Dr. Rajesh Patel",
-  "Dr. Amelia Crane",
-  "Dr. Jonas Berg",
-];
+const RISK_FROM_LEVEL: Record<string, RiskBucket> = {
+  "High Risk": "high",
+  "Moderate Risk": "med",
+  Benign: "low",
+};
 
-// MOCK: KPI cards. Real values require `patients_admin_read` RLS + inference audit table.
-const KPIS = [
-  { l: "Total patients", v: "3,218", d: "+142 this month" },
-  { l: "Scans processed", v: "12,847", d: "+1,284 last 7d" },
-  { l: "Urgent flagged", v: "47", d: "8 awaiting review", warn: true },
-  { l: "PHI access events", v: "1,942", d: "Last 24h" },
-];
+interface PatientRow {
+  id: string;
+  patient_id: string;
+  name: string;
+  clinician: string;
+  scans: number;
+  topClassFull: string | null;
+  risk: RiskBucket | null;
+  lastVisit: string | null;
+}
+
+interface Kpis {
+  totalPatients: number;
+  scansProcessed: number;
+  urgentFlagged: number;
+}
 
 export function PatientOversight() {
   const [search, setSearch] = useState("");
+  const [rows, setRows] = useState<PatientRow[]>([]);
+  const [kpis, setKpis] = useState<Kpis | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const rows = useMemo(() => {
+  useEffect(() => {
+    const load = async () => {
+      const supabase = createClient();
+      const [patientsRes, casesRes, detailsRes, totalPatientsRes, totalScansRes, urgentRes] =
+        await Promise.all([
+          supabase.from("patients").select("id, patient_id, name"),
+          supabase
+            .from("cases")
+            .select("patient_id, doctor_id, predicted_class, risk_level, created_at")
+            .order("created_at", { ascending: false }),
+          supabase.from("user_details").select("id, full_name"),
+          supabase.from("patients").select("*", { count: "exact", head: true }),
+          supabase.from("cases").select("*", { count: "exact", head: true }),
+          supabase
+            .from("cases")
+            .select("*", { count: "exact", head: true })
+            .eq("risk_level", "High Risk"),
+        ]);
+
+      if (patientsRes.error || casesRes.error || detailsRes.error) {
+        toast.error("Failed to load oversight data");
+        setLoading(false);
+        return;
+      }
+
+      const detailsMap = new Map<string, string>();
+      for (const d of detailsRes.data ?? []) {
+        if (d.full_name) detailsMap.set(d.id, d.full_name);
+      }
+
+      const byPatient = new Map<
+        string,
+        {
+          doctor_id: string;
+          predicted_class: string | null;
+          risk_level: string | null;
+          created_at: string | null;
+          count: number;
+        }
+      >();
+      for (const c of casesRes.data ?? []) {
+        const entry = byPatient.get(c.patient_id);
+        if (!entry) {
+          byPatient.set(c.patient_id, {
+            doctor_id: c.doctor_id,
+            predicted_class: c.predicted_class,
+            risk_level: c.risk_level,
+            created_at: c.created_at,
+            count: 1,
+          });
+        } else {
+          entry.count += 1;
+        }
+      }
+
+      const built: PatientRow[] = (patientsRes.data ?? []).map((p) => {
+        const latest = byPatient.get(p.id);
+        return {
+          id: p.id,
+          patient_id: p.patient_id,
+          name: p.name,
+          clinician: latest ? detailsMap.get(latest.doctor_id) ?? "—" : "—",
+          scans: latest?.count ?? 0,
+          topClassFull: latest?.predicted_class ?? null,
+          risk: latest?.risk_level ? RISK_FROM_LEVEL[latest.risk_level] ?? null : null,
+          lastVisit: latest?.created_at
+            ? new Date(latest.created_at).toISOString().slice(0, 10)
+            : null,
+        };
+      });
+
+      built.sort((a, b) => (b.lastVisit ?? "").localeCompare(a.lastVisit ?? ""));
+
+      setRows(built);
+      setKpis({
+        totalPatients: totalPatientsRes.count ?? 0,
+        scansProcessed: totalScansRes.count ?? 0,
+        urgentFlagged: urgentRes.count ?? 0,
+      });
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return PATIENTS_SEED.filter((p) => {
-      if (!q) return true;
-      return (
-        p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)
-      );
-    });
-  }, [search]);
+    if (!q) return rows;
+    return rows.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.patient_id.toLowerCase().includes(q)
+    );
+  }, [rows, search]);
+
+  const kpiCards = [
+    {
+      l: "Total patients",
+      v: kpis ? kpis.totalPatients.toLocaleString() : "—",
+      d: "All clinicians",
+    },
+    {
+      l: "Scans processed",
+      v: kpis ? kpis.scansProcessed.toLocaleString() : "—",
+      d: "All time",
+    },
+    {
+      l: "Urgent flagged",
+      v: kpis ? kpis.urgentFlagged.toLocaleString() : "—",
+      d: "risk_level = High Risk",
+      warn: (kpis?.urgentFlagged ?? 0) > 0,
+    },
+    { l: "PHI access events", v: "—", d: "Audit log pending", mock: true },
+  ];
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -72,21 +184,17 @@ export function PatientOversight() {
         }
       />
 
-      <div className="mb-5">
-        <Alert variant="info" title="Preview data">
-          <span className="text-xs">
-            Cross-clinician rows require <span className="mono">patients_admin_read</span> RLS
-            policy. Showing seed data until the migration is applied.
-          </span>
-        </Alert>
-      </div>
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        {KPIS.map((k) => (
+        {kpiCards.map((k) => (
           <div
             key={k.l}
-            className="rounded-lg border border-border bg-card p-5"
+            className="rounded-lg border border-border bg-card p-5 relative"
           >
+            {k.mock && (
+              <span className="absolute top-3 right-3 text-[10px] uppercase tracking-wide mono rounded px-1.5 py-0.5 border border-border text-muted-foreground">
+                mock
+              </span>
+            )}
             <div className="text-xs text-muted-foreground uppercase tracking-wide mono mb-2">
               {k.l}
             </div>
@@ -132,77 +240,92 @@ export function PatientOversight() {
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-border">
-                {[
-                  "Patient",
-                  "ID",
-                  "Assigned clinician",
-                  "Scans",
-                  "Latest finding",
-                  "Risk",
-                  "Last visit",
-                  "Audit",
-                ].map((h) => (
-                  <th
-                    key={h}
-                    className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wide px-5 py-3"
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((p, i) => {
-                const cls = ISIC_CLASSES.find((c) => c.code === p.topClass);
-                const risk = RISK_META[p.risk];
-                const doc = MOCK_CLINICIANS[i % MOCK_CLINICIANS.length];
-                return (
-                  <tr
-                    key={p.id}
-                    className="border-b border-border last:border-0 hover:bg-muted/40 transition"
-                  >
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-3">
-                        <Avatar name={p.name} size={28} />
-                        <span className="text-sm font-medium">{p.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 mono text-sm text-muted-foreground">
-                      {p.id}
-                    </td>
-                    <td className="px-5 py-3 text-sm">{doc}</td>
-                    <td className="px-5 py-3 mono text-sm">{p.scans}</td>
-                    <td className="px-5 py-3 text-sm">
-                      {cls?.name ?? p.topClass}
-                    </td>
-                    <td className="px-5 py-3">
-                      <span
-                        className="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
-                        style={{
-                          background: risk.bg,
-                          color: risk.color,
-                          border: `1px solid ${risk.color}33`,
-                        }}
-                      >
-                        {risk.label}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-sm text-muted-foreground mono">
-                      {p.lastVisit}
-                    </td>
-                    <td className="px-5 py-3">
-                      <Button variant="ghost" size="sm">
-                        <FileText size={12} /> Log
-                      </Button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          {loading ? (
+            <div className="p-12 text-center text-muted-foreground text-sm">
+              Loading patients…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="p-12 text-center text-muted-foreground text-sm">
+              No patients match current filter
+            </div>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border">
+                  {[
+                    "Patient",
+                    "ID",
+                    "Assigned clinician",
+                    "Scans",
+                    "Latest finding",
+                    "Risk",
+                    "Last visit",
+                    "Audit",
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wide px-5 py-3"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((p) => {
+                  const cls = p.topClassFull
+                    ? ISIC_CLASSES.find((c) => c.full === p.topClassFull)
+                    : null;
+                  const risk = p.risk ? RISK_META[p.risk] : null;
+                  return (
+                    <tr
+                      key={p.id}
+                      className="border-b border-border last:border-0 hover:bg-muted/40 transition"
+                    >
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-3">
+                          <Avatar name={p.name} size={28} />
+                          <span className="text-sm font-medium">{p.name}</span>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 mono text-sm text-muted-foreground">
+                        {p.patient_id}
+                      </td>
+                      <td className="px-5 py-3 text-sm">{p.clinician}</td>
+                      <td className="px-5 py-3 mono text-sm">{p.scans}</td>
+                      <td className="px-5 py-3 text-sm">
+                        {cls?.name ?? p.topClassFull ?? "—"}
+                      </td>
+                      <td className="px-5 py-3">
+                        {risk ? (
+                          <span
+                            className="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium"
+                            style={{
+                              background: risk.bg,
+                              color: risk.color,
+                              border: `1px solid ${risk.color}33`,
+                            }}
+                          >
+                            {risk.label}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-sm text-muted-foreground mono">
+                        {p.lastVisit ?? "—"}
+                      </td>
+                      <td className="px-5 py-3">
+                        <Button variant="ghost" size="sm">
+                          <FileText size={12} /> Log
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>
