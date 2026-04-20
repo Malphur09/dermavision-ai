@@ -22,7 +22,8 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 
-const IMAGES_BUCKET = "dermoscopy-images";
+const IMAGES_BUCKET = "dermoscopic-images";
+const HEATMAPS_BUCKET = "heatmaps";
 
 const ISIC_CODE: Record<string, string> = {
   Melanoma: "MEL",
@@ -157,6 +158,25 @@ export function DiagnosisResults() {
         if (data?.signedUrl) setImageUrl(data.signedUrl);
       })
       .finally(() => setLoadingImage(false));
+
+    // Fetch persisted heatmap. If the background upload in DiagnosticInput
+    // completed before this page loaded, gradcam_url is set and we prefer
+    // the storage URL over a transient session-storage data URL.
+    supabase
+      .from("cases")
+      .select("gradcam_url")
+      .eq("id", parsed.caseId)
+      .maybeSingle()
+      .then(async ({ data }) => {
+        if (!data?.gradcam_url) return;
+        const { data: signed } = await supabase.storage
+          .from(HEATMAPS_BUCKET)
+          .createSignedUrl(data.gradcam_url, 3600);
+        if (signed?.signedUrl) {
+          setHeatmapDataUrl(signed.signedUrl);
+          setHeatmapPending(false);
+        }
+      });
   }, []);
 
   useEffect(() => {

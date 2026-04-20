@@ -28,19 +28,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         if (currentUser) {
-          const { data: profile } = await supabase
+          const { data: profile, error } = await supabase
             .from('profiles')
             .select('role')
             .eq('id', currentUser.id)
             .maybeSingle();
-          setRole((profile?.role as Role) ?? 'doctor');
+          if (error || !profile) {
+            // Profile row missing or unreadable — treat as unresolved,
+            // do not default to a privileged role. Middleware handles redirects.
+            setRole(null);
+          } else {
+            setRole(profile.role as Role);
+          }
         } else {
           setRole(null);
         }
       } catch {
-        // Profile fetch failed — default to doctor role
-        if (currentUser) setRole('doctor');
-        else setRole(null);
+        setRole(null);
       } finally {
         setLoading(false);
       }

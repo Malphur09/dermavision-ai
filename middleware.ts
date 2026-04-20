@@ -1,7 +1,16 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-const DOCTOR_ROUTES = ['/diagnostic', '/results', '/records', '/report', '/profile']
+const AUTHED_ROUTES = [
+  '/diagnostic',
+  '/results',
+  '/records',
+  '/report',
+  '/settings',
+  '/doctor-dashboard',
+  '/admin',
+  '/dashboard',
+]
 const ADMIN_ROUTES = ['/admin', '/dashboard']
 
 export async function middleware(request: NextRequest) {
@@ -30,7 +39,7 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const { pathname } = request.nextUrl
 
-  // Logged-in user visiting /login → redirect to their home
+  // Logged-in user visiting /login → redirect to their home dashboard.
   if (pathname === '/login' && user) {
     const { data: profile } = await supabase
       .from('profiles')
@@ -39,19 +48,19 @@ export async function middleware(request: NextRequest) {
       .single()
 
     return NextResponse.redirect(
-      new URL(profile?.role === 'admin' ? '/admin' : '/diagnostic', request.url)
+      new URL(profile?.role === 'admin' ? '/dashboard' : '/doctor-dashboard', request.url)
     )
   }
 
-  const isDoctorRoute = DOCTOR_ROUTES.some((r) => pathname.startsWith(r))
+  const isAuthedRoute = AUTHED_ROUTES.some((r) => pathname.startsWith(r))
   const isAdminRoute = ADMIN_ROUTES.some((r) => pathname.startsWith(r))
 
   // Unauthenticated → /login
-  if ((isDoctorRoute || isAdminRoute) && !user) {
+  if (isAuthedRoute && !user) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // For admin routes, verify role from profiles table (user_metadata is client-writable)
+  // For admin routes, verify role from profiles table (user_metadata is client-writable).
   if (isAdminRoute && user) {
     const { data: profile } = await supabase
       .from('profiles')
@@ -60,7 +69,7 @@ export async function middleware(request: NextRequest) {
       .single()
 
     if (profile?.role !== 'admin') {
-      return NextResponse.redirect(new URL('/diagnostic', request.url))
+      return NextResponse.redirect(new URL('/doctor-dashboard', request.url))
     }
   }
 

@@ -29,7 +29,8 @@ import {
 } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 
-const IMAGES_BUCKET = "dermoscopy-images";
+const IMAGES_BUCKET = "dermoscopic-images";
+const HEATMAPS_BUCKET = "heatmaps";
 
 const RISK_LEVEL: Record<string, "High Risk" | "Moderate Risk" | "Benign"> = {
   Melanoma: "High Risk",
@@ -355,20 +356,36 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
         });
         if (!camRes.ok) return;
         const camData: { heatmap: string | null } = await camRes.json();
-        if (camData.heatmap) {
-          const stored = sessionStorage.getItem("lastCase");
-          if (stored) {
-            sessionStorage.setItem(
-              "lastCase",
-              JSON.stringify({
-                ...JSON.parse(stored),
-                heatmapDataUrl: camData.heatmap,
-              })
-            );
-          }
+        if (!camData.heatmap) return;
+
+        const stored = sessionStorage.getItem("lastCase");
+        if (stored) {
+          sessionStorage.setItem(
+            "lastCase",
+            JSON.stringify({
+              ...JSON.parse(stored),
+              heatmapDataUrl: camData.heatmap,
+            })
+          );
         }
+
+        // Persist heatmap to storage so it survives page refresh + is available
+        // for audit/review. Heatmap arrives as a base64 data URL; convert to blob.
+        const blob = await (await fetch(camData.heatmap)).blob();
+        const heatmapPath = `${user!.id}/${newCase.id}.png`;
+        const { error: hmUploadErr } = await supabase.storage
+          .from(HEATMAPS_BUCKET)
+          .upload(heatmapPath, blob, {
+            contentType: "image/png",
+            upsert: true,
+          });
+        if (hmUploadErr) return;
+        await supabase
+          .from("cases")
+          .update({ gradcam_url: heatmapPath })
+          .eq("id", newCase.id);
       } catch {
-        /* silent */
+        /* silent — heatmap is non-critical */
       }
     })();
   };

@@ -34,6 +34,8 @@ export function Settings() {
 
   const [fullName, setFullName] = useState("");
   const [specialty, setSpecialty] = useState("");
+  const [license, setLicense] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [loadingDetails, setLoadingDetails] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -65,13 +67,15 @@ export function Settings() {
     const supabase = createClient();
     supabase
       .from("user_details")
-      .select("full_name, specialty")
+      .select("full_name, specialty, license, phone")
       .eq("id", user.id)
       .maybeSingle()
       .then(({ data }) => {
         if (data) {
           setFullName(data.full_name ?? "");
           setSpecialty(data.specialty ?? "");
+          setLicense(data.license ?? "");
+          setPhone(data.phone ?? "");
         }
         setLoadingDetails(false);
       });
@@ -96,6 +100,8 @@ export function Settings() {
       id: user!.id,
       full_name: fullName.trim(),
       specialty: specialty.trim() || null,
+      license: license.trim() || null,
+      phone: phone.trim() || null,
     });
     const emailChanged = email !== user?.email;
     const emailUpdate = emailChanged
@@ -236,6 +242,32 @@ export function Settings() {
                     onChange={(e) => setSpecialty(e.target.value)}
                     placeholder="e.g. Dermatology & Skin Cancer"
                   />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="lic" className="mb-1.5 block">
+                      Medical license number
+                    </Label>
+                    <Input
+                      id="lic"
+                      value={license}
+                      onChange={(e) => setLicense(e.target.value)}
+                      placeholder="e.g. MD-28471"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ph" className="mb-1.5 block">
+                      Phone
+                    </Label>
+                    <Input
+                      id="ph"
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+1 555 0123"
+                    />
+                  </div>
                 </div>
 
                 <div>
