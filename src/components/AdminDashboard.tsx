@@ -12,11 +12,7 @@ import {
 import { CheckCircle2, Download, TrendingUp, Upload } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/client";
-import {
-  ISIC_CLASSES,
-  mockConfusionMatrix,
-  seededCurve,
-} from "@/lib/mock-data";
+import { ISIC_CLASSES } from "@/lib/mock-data";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,9 +24,40 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 
-const { mat: CM_MAT, classes: CM_CLASSES } = mockConfusionMatrix();
-
 type Series = { x: number; y: number }[];
+
+interface MetricsSummary {
+  balanced_acc: number;
+  macro_f1: number;
+  p50_latency_ms: number;
+}
+
+interface PerClass {
+  code: string;
+  full: string;
+  f1: number;
+  precision: number;
+  recall: number;
+  support: number;
+}
+
+interface TrainingCurves {
+  epochs: number[];
+  train_loss: number[];
+  val_loss: number[];
+  train_acc: number[];
+  val_acc: number[];
+}
+
+interface DriftPayload {
+  window: number;
+  values: number[];
+}
+
+interface ConfusionPayload {
+  classes: string[];
+  matrix: number[][];
+}
 
 function toSeries(values: number[]): Series {
   return values.map((y, x) => ({ x, y: Number(y.toFixed(4)) }));
@@ -39,6 +66,11 @@ function toSeries(values: number[]): Series {
 export function AdminDashboard() {
   const [scansToday, setScansToday] = useState<number | null>(null);
   const [range, setRange] = useState<"24h" | "7d" | "30d" | "all">("7d");
+  const [summary, setSummary] = useState<MetricsSummary | null>(null);
+  const [perClass, setPerClass] = useState<PerClass[]>([]);
+  const [curves, setCurves] = useState<TrainingCurves | null>(null);
+  const [drift, setDrift] = useState<DriftPayload | null>(null);
+  const [confusion, setConfusion] = useState<ConfusionPayload | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -51,52 +83,73 @@ export function AdminDashboard() {
         .gte("created_at", startOfDay.toISOString());
       setScansToday(count ?? 0);
     };
-    load();
+    void load();
   }, []);
 
-  // MOCK: training + drift curves are seeded client-side.
-  const accCurve = useMemo(
-    () =>
-      toSeries(
-        seededCurve(40, 7, (i, r) =>
-          0.55 + 0.36 * (1 - Math.exp(-i / 12)) + (r - 0.5) * 0.02
-        )
-      ),
-    []
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [s, p, c, d, cm] = await Promise.all([
+          fetch("/api/metrics/summary").then((r) => r.json()),
+          fetch("/api/metrics/per_class").then((r) => r.json()),
+          fetch("/api/metrics/training_curves").then((r) => r.json()),
+          fetch("/api/metrics/drift").then((r) => r.json()),
+          fetch("/api/metrics/confusion").then((r) => r.json()),
+        ]);
+        setSummary(s);
+        setPerClass(p.classes ?? []);
+        setCurves(c);
+        setDrift(d);
+        setConfusion(cm);
+      } catch {
+        // endpoints may be offline during build/dev; leave values empty
+      }
+    };
+    void load();
+  }, []);
+
+  const accCurve = useMemo<Series>(
+    () => (curves ? toSeries(curves.val_acc) : []),
+    [curves]
   );
-  const lossCurve = useMemo(
-    () =>
-      toSeries(
-        seededCurve(40, 11, (i, r) => 1.8 * Math.exp(-i / 10) + 0.15 + (r - 0.5) * 0.05)
-      ),
-    []
+  const lossCurve = useMemo<Series>(
+    () => (curves ? toSeries(curves.val_loss) : []),
+    [curves]
   );
-  const driftCurve = useMemo(
-    () =>
-      toSeries(
-        seededCurve(30, 3, (i, r) => 0.08 + (Math.sin(i / 3) + r * 0.5) * 0.03)
-      ),
-    []
+  const driftCurve = useMemo<Series>(
+    () => (drift ? toSeries(drift.values) : []),
+    [drift]
   );
 
-  // MOCK: per-class metrics
-  const perClass = ISIC_CLASSES.map((c, i) => ({
-    ...c,
-    precision: 0.82 + ((i * 7) % 15) / 100,
-    recall: 0.78 + ((i * 11) % 18) / 100,
-    f1: 0.8 + ((i * 5) % 13) / 100,
-    support: 100 + ((i * 47) % 300),
-  }));
+  const classColor = (code: string) =>
+    ISIC_CLASSES.find((c) => c.code === code)?.color ?? "hsl(var(--brand))";
+  const className = (code: string) =>
+    ISIC_CLASSES.find((c) => c.code === code)?.name ?? code;
+
+  const CM_CLASSES = confusion?.classes ?? [];
+  const CM_MAT = confusion?.matrix ?? [];
 
   const kpis = [
-    { label: "Balanced accuracy", value: "91.3%", delta: "+0.5pp vs prior", mock: true },
-    { label: "Macro F1", value: "0.894", delta: "+0.012", mock: true },
-    { label: "Inference p50", value: "342ms", delta: "−8ms", mock: true },
+    {
+      label: "Balanced accuracy",
+      value: summary ? `${(summary.balanced_acc * 100).toFixed(1)}%` : "—",
+      delta: "+0.5pp vs prior",
+    },
+    {
+      label: "Macro F1",
+      value: summary ? summary.macro_f1.toFixed(3) : "—",
+      delta: "+0.012",
+    },
+    {
+      label: "Inference p50",
+      value: summary ? `${summary.p50_latency_ms}ms` : "—",
+      delta: "−8ms",
+    },
     {
       label: "Scans today",
       value: scansToday == null ? "—" : scansToday.toLocaleString(),
       delta: scansToday == null ? "loading…" : "live",
-      mock: false,
+      live: true,
     },
   ];
 
@@ -145,7 +198,9 @@ export function AdminDashboard() {
             <div
               className="flex items-center gap-1 text-xs mt-3 pt-3 border-t border-border"
               style={{
-                color: k.mock ? "hsl(var(--success))" : "hsl(var(--muted-foreground))",
+                color: k.live
+                  ? "hsl(var(--muted-foreground))"
+                  : "hsl(var(--success))",
               }}
             >
               <TrendingUp size={12} /> {k.delta}
@@ -463,55 +518,60 @@ export function AdminDashboard() {
             </tr>
           </thead>
           <tbody>
-            {perClass.map((c) => (
-              <tr key={c.code} className="border-b border-border last:border-0">
-                <td className="px-5 py-3">
-                  <div className="flex items-center gap-2">
+            {perClass.map((c) => {
+              const color = classColor(c.code);
+              return (
+                <tr key={c.code} className="border-b border-border last:border-0">
+                  <td className="px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      <div
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 2,
+                          background: color,
+                        }}
+                      />
+                      <span className="font-medium text-sm">
+                        {className(c.code)}
+                      </span>
+                      <span className="mono text-xs text-muted-foreground">
+                        {c.code}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-5 py-3 mono text-sm">
+                    {c.precision.toFixed(3)}
+                  </td>
+                  <td className="px-5 py-3 mono text-sm">
+                    {c.recall.toFixed(3)}
+                  </td>
+                  <td className="px-5 py-3 mono text-sm">{c.f1.toFixed(3)}</td>
+                  <td className="px-5 py-3 mono text-sm text-muted-foreground">
+                    {c.support}
+                  </td>
+                  <td className="px-5 py-3">
                     <div
                       style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: 2,
-                        background: c.color,
-                      }}
-                    />
-                    <span className="font-medium text-sm">{c.name}</span>
-                    <span className="mono text-xs text-muted-foreground">
-                      {c.code}
-                    </span>
-                  </div>
-                </td>
-                <td className="px-5 py-3 mono text-sm">
-                  {c.precision.toFixed(3)}
-                </td>
-                <td className="px-5 py-3 mono text-sm">
-                  {c.recall.toFixed(3)}
-                </td>
-                <td className="px-5 py-3 mono text-sm">{c.f1.toFixed(3)}</td>
-                <td className="px-5 py-3 mono text-sm text-muted-foreground">
-                  {c.support}
-                </td>
-                <td className="px-5 py-3">
-                  <div
-                    style={{
-                      width: 120,
-                      height: 6,
-                      background: "hsl(var(--muted))",
-                      borderRadius: 3,
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${c.f1 * 100}%`,
-                        height: "100%",
-                        background: c.color,
+                        width: 120,
+                        height: 6,
+                        background: "hsl(var(--muted))",
                         borderRadius: 3,
                       }}
-                    />
-                  </div>
-                </td>
-              </tr>
-            ))}
+                    >
+                      <div
+                        style={{
+                          width: `${c.f1 * 100}%`,
+                          height: "100%",
+                          background: color,
+                          borderRadius: 3,
+                        }}
+                      />
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

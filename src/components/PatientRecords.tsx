@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   ChevronLeft,
@@ -11,6 +12,7 @@ import {
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
+import { logPhiAccess } from "@/lib/audit";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";
@@ -59,6 +61,7 @@ const RISK_BADGE: Record<
 };
 
 export function PatientRecords() {
+  const router = useRouter();
   const [records, setRecords] = useState<PatientRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -246,7 +249,19 @@ export function PatientRecords() {
                     <tr
                       key={r.patientDbId}
                       className="border-b border-border hover:bg-muted/40 transition cursor-pointer"
-                      onClick={() => toast.info(`Opening ${r.patientId}…`)}
+                      onClick={() => {
+                        if (!r.caseId) {
+                          toast.info(`No case for ${r.patientId}`);
+                          return;
+                        }
+                        void logPhiAccess({
+                          resource_type: "patient",
+                          resource_id: r.patientDbId,
+                          action: "viewed",
+                          metadata: { caseId: r.caseId },
+                        });
+                        router.push(`/results?caseId=${r.caseId}`);
+                      }}
                     >
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-3">

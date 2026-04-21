@@ -39,14 +39,29 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const { pathname } = request.nextUrl
 
-  // Logged-in user visiting /login → redirect to their home dashboard.
-  if (pathname === '/login' && user) {
-    const { data: profile } = await supabase
+  // Fetch profile once per request for any checks that need role/suspended.
+  let profile: { role: string | null; suspended: boolean | null } | null = null
+  if (user) {
+    const { data } = await supabase
       .from('profiles')
-      .select('role')
+      .select('role, suspended')
       .eq('id', user.id)
       .single()
+    profile = data ?? null
+  }
 
+  // Suspended users: sign out and redirect to /login?suspended=1.
+  if (user && profile?.suspended) {
+    await supabase.auth.signOut()
+    if (pathname !== '/login') {
+      const url = new URL('/login', request.url)
+      url.searchParams.set('suspended', '1')
+      return NextResponse.redirect(url)
+    }
+  }
+
+  // Logged-in user visiting /login → redirect to their home dashboard.
+  if (pathname === '/login' && user && !profile?.suspended) {
     return NextResponse.redirect(
       new URL(profile?.role === 'admin' ? '/dashboard' : '/doctor-dashboard', request.url)
     )
@@ -61,16 +76,8 @@ export async function middleware(request: NextRequest) {
   }
 
   // For admin routes, verify role from profiles table (user_metadata is client-writable).
-  if (isAdminRoute && user) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (profile?.role !== 'admin') {
-      return NextResponse.redirect(new URL('/doctor-dashboard', request.url))
-    }
+  if (isAdminRoute && user && profile?.role !== 'admin') {
+    return NextResponse.redirect(new URL('/doctor-dashboard', request.url))
   }
 
   return supabaseResponse

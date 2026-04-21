@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
+  Check,
   Download,
   FileText,
   Info,
@@ -13,14 +14,17 @@ import {
   Save,
   Sparkles,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
+import { logPhiAccess } from "@/lib/audit";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Alert } from "@/components/primitives/Alert";
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
 const IMAGES_BUCKET = "dermoscopic-images";
 const HEATMAPS_BUCKET = "heatmaps";
@@ -118,10 +122,32 @@ interface CaseSession {
   lesionSite: string;
   storagePath: string;
   heatmapDataUrl: string | null;
+  status?: string;
+  notes?: string | null;
 }
+
+const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
+  pending: {
+    label: "Awaiting review",
+    color: "hsl(var(--warning))",
+    bg: "hsl(var(--warning) / 0.12)",
+  },
+  reviewed: {
+    label: "Reviewed",
+    color: "hsl(var(--success))",
+    bg: "hsl(var(--success) / 0.12)",
+  },
+  complete: {
+    label: "Complete",
+    color: "hsl(var(--success))",
+    bg: "hsl(var(--success) / 0.12)",
+  },
+};
 
 export function DiagnosisResults() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const paramCaseId = searchParams.get("caseId");
   const [caseData, setCaseData] = useState<CaseSession | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [loadingImage, setLoadingImage] = useState(true);
@@ -129,8 +155,99 @@ export function DiagnosisResults() {
   const [heatmapPending, setHeatmapPending] = useState(true);
   const [heatmapOn, setHeatmapOn] = useState(true);
   const [blend, setBlend] = useState(50);
+  const [status, setStatus] = useState<string>("pending");
+  const [notes, setNotes] = useState<string>("");
+  const [initialNotes, setInitialNotes] = useState<string>("");
+  const [savingReview, setSavingReview] = useState(false);
+  const [savingNotes, setSavingNotes] = useState(false);
 
   useEffect(() => {
+    const supabase = createClient();
+
+    const hydrateFromRow = async (row: {
+      id: string;
+      image_url: string | null;
+      gradcam_url: string | null;
+      predicted_class: string | null;
+      probabilities: Record<string, number> | null;
+      confidence: number | null;
+      risk_level: string | null;
+      lesion_site: string | null;
+      status: string | null;
+      notes: string | null;
+      patients: { patient_id: string | null; name: string | null } | null;
+    }) => {
+      const patientId = row.patients?.patient_id ?? undefined;
+      const patientName = row.patients?.name ?? undefined;
+      const parsed: CaseSession = {
+        caseId: row.id,
+        patientId,
+        patientName,
+        patientLabel: [patientId, patientName].filter(Boolean).join(" · "),
+        predictedClass: row.predicted_class ?? "Unknown",
+        probabilities: row.probabilities ?? {},
+        confidence: row.confidence,
+        riskLevel: row.risk_level ?? "Benign",
+        lesionSite: row.lesion_site ?? "",
+        storagePath: row.image_url ?? "",
+        heatmapDataUrl: null,
+        status: row.status ?? "pending",
+        notes: row.notes,
+      };
+      setCaseData(parsed);
+      setStatus(parsed.status ?? "pending");
+      setNotes(parsed.notes ?? "");
+      setInitialNotes(parsed.notes ?? "");
+
+      if (parsed.storagePath) {
+        const { data: signed } = await supabase.storage
+          .from(IMAGES_BUCKET)
+          .createSignedUrl(parsed.storagePath, 3600);
+        if (signed?.signedUrl) setImageUrl(signed.signedUrl);
+      }
+      setLoadingImage(false);
+
+      if (row.gradcam_url) {
+        const { data: signed } = await supabase.storage
+          .from(HEATMAPS_BUCKET)
+          .createSignedUrl(row.gradcam_url, 3600);
+        if (signed?.signedUrl) {
+          setHeatmapDataUrl(signed.signedUrl);
+          setHeatmapPending(false);
+        }
+      } else {
+        setHeatmapPending(false);
+      }
+
+      void logPhiAccess({
+        resource_type: "case",
+        resource_id: parsed.caseId,
+        action: "viewed",
+      });
+    };
+
+    const loadById = async (id: string) => {
+      const { data, error } = await supabase
+        .from("cases")
+        .select(
+          "id, image_url, gradcam_url, predicted_class, probabilities, confidence, risk_level, lesion_site, status, notes, patients(patient_id, name)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+      if (error || !data) {
+        setLoadingImage(false);
+        setHeatmapPending(false);
+        return;
+      }
+      const row = data as unknown as Parameters<typeof hydrateFromRow>[0];
+      await hydrateFromRow(row);
+    };
+
+    if (paramCaseId) {
+      void loadById(paramCaseId);
+      return;
+    }
+
     const raw = sessionStorage.getItem("lastCase");
     if (!raw) {
       setLoadingImage(false);
@@ -150,7 +267,6 @@ export function DiagnosisResults() {
       setHeatmapDataUrl(parsed.heatmapDataUrl);
       setHeatmapPending(false);
     }
-    const supabase = createClient();
     supabase.storage
       .from(IMAGES_BUCKET)
       .createSignedUrl(parsed.storagePath, 3600)
@@ -159,42 +275,95 @@ export function DiagnosisResults() {
       })
       .finally(() => setLoadingImage(false));
 
-    // Fetch persisted heatmap. If the background upload in DiagnosticInput
-    // completed before this page loaded, gradcam_url is set and we prefer
-    // the storage URL over a transient session-storage data URL.
     supabase
       .from("cases")
-      .select("gradcam_url")
+      .select("gradcam_url, status, notes")
       .eq("id", parsed.caseId)
       .maybeSingle()
       .then(async ({ data }) => {
-        if (!data?.gradcam_url) return;
+        if (!data) return;
+        if (data.status) setStatus(data.status);
+        if (typeof data.notes === "string") {
+          setNotes(data.notes);
+          setInitialNotes(data.notes);
+        }
+        if (data.gradcam_url) {
+          const { data: signed } = await supabase.storage
+            .from(HEATMAPS_BUCKET)
+            .createSignedUrl(data.gradcam_url, 3600);
+          if (signed?.signedUrl) {
+            setHeatmapDataUrl(signed.signedUrl);
+            setHeatmapPending(false);
+          }
+        }
+      });
+
+    void logPhiAccess({
+      resource_type: "case",
+      resource_id: parsed.caseId,
+      action: "viewed",
+    });
+  }, [paramCaseId]);
+
+  const handleMarkReviewed = async () => {
+    if (!caseData || status === "reviewed" || status === "complete") return;
+    setSavingReview(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("cases")
+      .update({ status: "reviewed" })
+      .eq("id", caseData.caseId);
+    setSavingReview(false);
+    if (error) {
+      toast.error("Failed to mark reviewed");
+      return;
+    }
+    setStatus("reviewed");
+    toast.success("Case marked as reviewed");
+    void logPhiAccess({
+      resource_type: "case",
+      resource_id: caseData.caseId,
+      action: "reviewed",
+    });
+  };
+
+  const handleSaveNotes = async () => {
+    if (!caseData || notes === initialNotes) return;
+    setSavingNotes(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("cases")
+      .update({ notes })
+      .eq("id", caseData.caseId);
+    setSavingNotes(false);
+    if (error) {
+      toast.error("Failed to save notes");
+      return;
+    }
+    setInitialNotes(notes);
+    toast.success("Notes saved");
+  };
+
+  useEffect(() => {
+    if (!heatmapPending || !caseData) return;
+    const supabase = createClient();
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from("cases")
+        .select("gradcam_url")
+        .eq("id", caseData.caseId)
+        .maybeSingle();
+      if (data?.gradcam_url) {
         const { data: signed } = await supabase.storage
           .from(HEATMAPS_BUCKET)
           .createSignedUrl(data.gradcam_url, 3600);
         if (signed?.signedUrl) {
           setHeatmapDataUrl(signed.signedUrl);
           setHeatmapPending(false);
+          clearInterval(interval);
         }
-      });
-  }, []);
-
-  useEffect(() => {
-    if (!heatmapPending) return;
-    const interval = setInterval(() => {
-      const raw = sessionStorage.getItem("lastCase");
-      if (!raw) {
-        clearInterval(interval);
-        setHeatmapPending(false);
-        return;
       }
-      const parsed = JSON.parse(raw) as CaseSession;
-      if (parsed.heatmapDataUrl) {
-        setHeatmapDataUrl(parsed.heatmapDataUrl);
-        setHeatmapPending(false);
-        clearInterval(interval);
-      }
-    }, 500);
+    }, 1500);
     const timeout = setTimeout(() => {
       clearInterval(interval);
       setHeatmapPending(false);
@@ -203,7 +372,7 @@ export function DiagnosisResults() {
       clearInterval(interval);
       clearTimeout(timeout);
     };
-  }, [heatmapPending]);
+  }, [heatmapPending, caseData]);
 
   const ranked = useMemo(() => {
     if (!caseData) return [];
@@ -262,8 +431,19 @@ export function DiagnosisResults() {
             >
               <Download size={14} /> Export PDF
             </Button>
-            <Button variant="brand" onClick={() => router.push("/records")}>
-              <Save size={14} /> View record
+            <Button
+              variant="brand"
+              onClick={handleMarkReviewed}
+              disabled={
+                savingReview || status === "reviewed" || status === "complete"
+              }
+            >
+              <Check size={14} />
+              {status === "reviewed" || status === "complete"
+                ? "Reviewed"
+                : savingReview
+                ? "Saving…"
+                : "Mark reviewed"}
             </Button>
           </>
         }
@@ -304,9 +484,65 @@ export function DiagnosisResults() {
             name={patientDisplayName}
             label={patientLabel}
             lesionSite={caseData.lesionSite}
+            status={status}
           />
           <NextStepsCard steps={nextSteps} />
+          <NotesCard
+            notes={notes}
+            setNotes={setNotes}
+            onSave={handleSaveNotes}
+            saving={savingNotes}
+            dirty={notes !== initialNotes}
+          />
         </div>
+      </div>
+    </div>
+  );
+}
+
+function NotesCard({
+  notes,
+  setNotes,
+  onSave,
+  saving,
+  dirty,
+}: {
+  notes: string;
+  setNotes: (v: string) => void;
+  onSave: () => void;
+  saving: boolean;
+  dirty: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold">Clinical notes</h3>
+        {dirty && (
+          <span className="text-[11px] mono text-muted-foreground">
+            unsaved
+          </span>
+        )}
+      </div>
+      <Textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        onBlur={onSave}
+        placeholder="Clinical impression, histology correlation, follow-up plan…"
+        rows={5}
+        className="resize-none text-sm"
+      />
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-[11px] text-muted-foreground">
+          Auto-saves on blur · stored per case
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onSave}
+          disabled={!dirty || saving}
+        >
+          <Save size={12} /> {saving ? "Saving…" : "Save"}
+        </Button>
       </div>
     </div>
   );
@@ -580,11 +816,14 @@ function PatientCard({
   name,
   label,
   lesionSite,
+  status,
 }: {
   name: string;
   label: string;
   lesionSite: string;
+  status: string;
 }) {
+  const meta = STATUS_META[status] ?? STATUS_META.pending;
   return (
     <div className="rounded-lg border border-border bg-card p-5">
       <div className="flex items-center gap-3 mb-4">
@@ -604,7 +843,16 @@ function PatientCard({
         </div>
         <div>
           <div className="text-xs text-muted-foreground">Status</div>
-          <div className="font-medium">Awaiting review</div>
+          <span
+            className="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium mt-0.5"
+            style={{
+              background: meta.bg,
+              color: meta.color,
+              border: `1px solid ${meta.color}33`,
+            }}
+          >
+            {meta.label}
+          </span>
         </div>
       </div>
     </div>

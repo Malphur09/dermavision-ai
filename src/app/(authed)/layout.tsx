@@ -8,6 +8,7 @@ import {
   FolderOpen,
   LayoutDashboard,
   Layers,
+  ScrollText,
   Settings,
   Upload,
   UploadCloud,
@@ -33,6 +34,7 @@ const adminNav: NavItem[] = [
   { path: "/admin/publish", label: "Publish model", icon: UploadCloud },
   { path: "/admin/patients", label: "Patient oversight", icon: UsersRound },
   { path: "/admin", label: "Users", icon: Users },
+  { path: "/admin/audit", label: "Audit log", icon: ScrollText },
   { path: "/settings", label: "Settings", icon: Settings },
 ];
 
