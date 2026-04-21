@@ -124,8 +124,8 @@ export function UploadWizard() {
 
   const handleFilePick = (f: File | null) => {
     if (!f) return;
-    if (!/\.(onnx|pth|safetensors)$/.test(f.name)) {
-      toast.error("Use .onnx, .pth, or .safetensors");
+    if (!/\.(onnx|pt)$/i.test(f.name)) {
+      toast.error("Use .onnx or .pt");
       return;
     }
     if (f.size > 2 * 1024 * 1024 * 1024) {
@@ -260,7 +260,7 @@ export function UploadWizard() {
                     style={{ color: "hsl(var(--muted-foreground))" }}
                   />
                   <div className="mt-3 font-medium text-sm">
-                    Drop .pth / .onnx / .safetensors
+                    Drop .onnx or .pt
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
                     or click to browse · up to 2 GB
@@ -270,7 +270,7 @@ export function UploadWizard() {
               <input
                 ref={fileInput}
                 type="file"
-                accept=".onnx,.pth,.safetensors"
+                accept=".onnx,.pt"
                 className="hidden"
                 onChange={(e) => handleFilePick(e.target.files?.[0] ?? null)}
               />

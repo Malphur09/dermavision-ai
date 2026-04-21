@@ -34,10 +34,18 @@ def invite_user():
     )
     if resp.status_code >= 400:
         return (
-            jsonify({"error": resp.json().get("msg") or "Invite failed"}),
+            jsonify({"error": _safe_error(resp, "Invite failed")}),
             resp.status_code,
         )
     return jsonify({"ok": True, "email": email, "role": role})
+
+
+def _safe_error(resp, fallback):
+    try:
+        body = resp.json()
+    except Exception:
+        return fallback
+    return body.get("msg") or body.get("error") or body.get("message") or fallback
 
 
 @admin_bp.route("/reset-mfa", methods=["POST"])
@@ -48,19 +56,22 @@ def reset_mfa():
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
-    factors_resp = requests.get(
-        f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}/factors",
+    # Supabase Admin API: GET /auth/v1/admin/users/{id} returns user with
+    # `factors` array inline. There is no /factors subresource on GET.
+    user_resp = requests.get(
+        f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}",
         headers=service_headers(),
         timeout=10,
     )
-    if factors_resp.status_code >= 400:
+    if user_resp.status_code >= 400:
         return (
-            jsonify({"error": factors_resp.json().get("msg") or "Factor lookup failed"}),
-            factors_resp.status_code,
+            jsonify({"error": _safe_error(user_resp, "User lookup failed")}),
+            user_resp.status_code,
         )
-    factors = factors_resp.json().get("factors", [])
+    factors = user_resp.json().get("factors") or []
 
     deleted = 0
+    errors = []
     for f in factors:
         factor_id = f.get("id")
         if not factor_id:
@@ -72,5 +83,9 @@ def reset_mfa():
         )
         if d.status_code < 400:
             deleted += 1
+        else:
+            errors.append(_safe_error(d, f"Delete failed for {factor_id}"))
 
-    return jsonify({"ok": True, "deleted": deleted, "total": len(factors)})
+    if errors and deleted == 0:
+        return jsonify({"error": errors[0], "errors": errors}), 502
+    return jsonify({"ok": True, "deleted": deleted, "total": len(factors), "errors": errors})

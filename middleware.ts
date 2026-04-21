@@ -56,7 +56,13 @@ export async function middleware(request: NextRequest) {
     if (pathname !== '/login') {
       const url = new URL('/login', request.url)
       url.searchParams.set('suspended', '1')
-      return NextResponse.redirect(url)
+      const redirect = NextResponse.redirect(url)
+      // Forward sign-out cookie deletions from supabaseResponse so the
+      // client actually clears sb-*-auth-token on this response.
+      for (const c of supabaseResponse.cookies.getAll()) {
+        redirect.cookies.set(c)
+      }
+      return redirect
     }
   }
 
