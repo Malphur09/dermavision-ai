@@ -87,23 +87,28 @@ export function AdminDashboard() {
   }, []);
 
   useEffect(() => {
-    const load = async () => {
+    const fetchJson = async <T,>(url: string): Promise<T | null> => {
       try {
-        const [s, p, c, d, cm] = await Promise.all([
-          fetch("/api/metrics/summary").then((r) => r.json()),
-          fetch("/api/metrics/per_class").then((r) => r.json()),
-          fetch("/api/metrics/training_curves").then((r) => r.json()),
-          fetch("/api/metrics/drift").then((r) => r.json()),
-          fetch("/api/metrics/confusion").then((r) => r.json()),
-        ]);
-        setSummary(s);
-        setPerClass(p.classes ?? []);
-        setCurves(c);
-        setDrift(d);
-        setConfusion(cm);
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        return (await r.json()) as T;
       } catch {
-        // endpoints may be offline during build/dev; leave values empty
+        return null;
       }
+    };
+    const load = async () => {
+      const [s, p, c, d, cm] = await Promise.all([
+        fetchJson<MetricsSummary>("/api/metrics/summary"),
+        fetchJson<{ classes: PerClass[] }>("/api/metrics/per_class"),
+        fetchJson<TrainingCurves>("/api/metrics/training_curves"),
+        fetchJson<DriftPayload>("/api/metrics/drift"),
+        fetchJson<ConfusionPayload>("/api/metrics/confusion"),
+      ]);
+      if (s) setSummary(s);
+      if (p?.classes) setPerClass(p.classes);
+      if (c) setCurves(c);
+      if (d) setDrift(d);
+      if (cm) setConfusion(cm);
     };
     void load();
   }, []);

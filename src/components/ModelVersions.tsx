@@ -70,21 +70,26 @@ export function ModelVersions() {
   const [compareB, setCompareB] = useState<string>("");
 
   useEffect(() => {
-    const load = async () => {
+    const fetchJson = async <T,>(url: string): Promise<T | null> => {
       try {
-        const [vRes, pRes] = await Promise.all([
-          fetch("/api/model/versions").then((r) => r.json()),
-          fetch("/api/metrics/per_class").then((r) => r.json()),
-        ]);
-        const vList = (vRes.versions ?? []) as ModelVersion[];
-        setVersions(vList);
-        setPerClass(pRes.classes ?? []);
-        if (vList.length) {
-          setCompareA(vList[0].version);
-          setCompareB(vList[1]?.version ?? vList[0].version);
-        }
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        return (await r.json()) as T;
       } catch {
-        // leave empty
+        return null;
+      }
+    };
+    const load = async () => {
+      const [vRes, pRes] = await Promise.all([
+        fetchJson<{ versions: ModelVersion[] }>("/api/model/versions"),
+        fetchJson<{ classes: PerClass[] }>("/api/metrics/per_class"),
+      ]);
+      const vList = vRes?.versions ?? [];
+      setVersions(vList);
+      setPerClass(pRes?.classes ?? []);
+      if (vList.length) {
+        setCompareA(vList[0].version);
+        setCompareB(vList[1]?.version ?? vList[0].version);
       }
     };
     void load();

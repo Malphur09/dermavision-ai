@@ -328,7 +328,7 @@ export function DiagnosisResults() {
   };
 
   const handleSaveNotes = async () => {
-    if (!caseData || notes === initialNotes) return;
+    if (!caseData || notes === initialNotes || savingNotes) return;
     setSavingNotes(true);
     const supabase = createClient();
     const { error } = await supabase
@@ -367,6 +367,7 @@ export function DiagnosisResults() {
     const timeout = setTimeout(() => {
       clearInterval(interval);
       setHeatmapPending(false);
+      toast.warning("Heatmap unavailable — generation timed out");
     }, 30_000);
     return () => {
       clearInterval(interval);
@@ -396,6 +397,22 @@ export function DiagnosisResults() {
           </p>
           <Button variant="brand" onClick={() => router.push("/diagnostic")}>
             Go to diagnostic
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (ranked.length === 0) {
+    return (
+      <div className="p-8 max-w-7xl mx-auto">
+        <div className="flex flex-col items-center justify-center py-24 gap-4">
+          <AlertCircle className="h-12 w-12 text-muted-foreground" />
+          <p className="text-muted-foreground">
+            Case missing class probabilities — rerun prediction.
+          </p>
+          <Button variant="brand" onClick={() => router.push("/diagnostic")}>
+            New scan
           </Button>
         </div>
       </div>

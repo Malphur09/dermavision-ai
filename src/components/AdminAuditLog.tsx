@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -36,7 +36,16 @@ export function AdminAuditLog() {
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [actionFilter, setActionFilter] = useState<string>("all");
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     const load = async () => {
@@ -53,6 +62,14 @@ export function AdminAuditLog() {
         .order("created_at", { ascending: false })
         .range(from, to);
       if (actionFilter !== "all") query = query.eq("action", actionFilter);
+      if (debouncedSearch) {
+        const esc = debouncedSearch.replace(/[,%()]/g, "");
+        if (esc) {
+          query = query.or(
+            `resource_id.ilike.%${esc}%,resource_type.ilike.%${esc}%`
+          );
+        }
+      }
 
       const { data, error, count } = await query;
       if (error) {
@@ -77,24 +94,15 @@ export function AdminAuditLog() {
           if (d.full_name) map[d.id] = d.full_name;
         }
         setNames(map);
+      } else {
+        setNames({});
       }
       setLoading(false);
     };
     void load();
-  }, [page, actionFilter]);
+  }, [page, actionFilter, debouncedSearch]);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => {
-      const name = r.user_id ? names[r.user_id] ?? "" : "";
-      return (
-        (r.resource_id ?? "").toLowerCase().includes(q) ||
-        (r.resource_type ?? "").toLowerCase().includes(q) ||
-        name.toLowerCase().includes(q)
-      );
-    });
-  }, [rows, search, names]);
+  const filtered = rows;
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
@@ -114,7 +122,7 @@ export function AdminAuditLog() {
               className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
             />
             <Input
-              placeholder="Search user, resource…"
+              placeholder="Search resource id or type…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-9 pl-9"
