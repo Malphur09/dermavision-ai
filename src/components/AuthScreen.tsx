@@ -1,225 +1,534 @@
-import { useState } from 'react';
-import { Activity, Lock, Mail, AlertCircle } from 'lucide-react';
-import { toast } from 'sonner';
-import { createClient } from '@/lib/supabase/client';
+"use client";
+import { useState, FormEvent } from "react";
+import {
+  ArrowRight,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  Lock,
+  Mail,
+} from "lucide-react";
+import { toast } from "sonner";
+
+import { createClient } from "@/lib/supabase/client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { LogoWord } from "@/components/primitives/Logo";
 
 interface AuthScreenProps {
-  onLogin: (role: 'doctor' | 'admin') => void;
+  onLogin: () => void;
 }
 
-type Mode = 'login' | 'signup';
+type Mode = "login" | "signup";
 
 export function AuthScreen({ onLogin }: AuthScreenProps) {
-  const [mode, setMode] = useState<Mode>('login');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
-  const [isLoading, setIsLoading] = useState(false);
+  const [mode, setMode] = useState<Mode>("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [license, setLicense] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [remember, setRemember] = useState(true);
+  const [errors, setErrors] = useState<{ email?: string; password?: string }>(
+    {}
+  );
+  const [loading, setLoading] = useState(false);
   const [confirmationSent, setConfirmationSent] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
+  const [resetSending, setResetSending] = useState(false);
 
-  const validateForm = () => {
-    const newErrors: { email?: string; password?: string } = {};
-
-    if (!email.trim()) {
-      newErrors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      newErrors.email = 'Please enter a valid email address';
-    }
-
-    if (!password.trim()) {
-      newErrors.password = 'Password is required';
-    } else if (password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters';
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+  const validate = () => {
+    const next: typeof errors = {};
+    if (!email.trim()) next.email = "Email is required";
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      next.email = "Enter a valid email address";
+    if (!password.trim()) next.password = "Password is required";
+    else if (password.length < 6)
+      next.password = "Password must be at least 6 characters";
+    setErrors(next);
+    return Object.keys(next).length === 0;
   };
 
-  const clearFieldError = (field: 'email' | 'password') => {
-    if (errors[field]) {
-      setErrors((prev) => {
-        const next = { ...prev };
-        delete next[field];
-        return next;
-      });
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!validateForm()) {
-      toast.error('Please fix the errors before submitting');
+  const handleReset = async () => {
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setErrors({ email: "Enter a valid email address" });
       return;
     }
-
-    setIsLoading(true);
+    setResetSending(true);
     const supabase = createClient();
-
-    try {
-    if (mode === 'signup') {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: { role: 'doctor' },
-        },
-      });
-
-      if (error) {
-        toast.error(error.message);
-        setIsLoading(false);
-        return;
-      }
-
-      // If session is null, email confirmation is required
-      if (!data.session) {
-        setConfirmationSent(true);
-        setIsLoading(false);
-        return;
-      }
-
-      toast.success('Account created. Welcome!');
-      onLogin('doctor');
-    } else {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-
-      if (error) {
-        toast.error('Invalid email or password');
-        setErrors({ email: ' ', password: 'Invalid email or password' });
-        setIsLoading(false);
-        return;
-      }
-
-      toast.success('Welcome back!');
-      onLogin('doctor'); // AuthContext sets real role; middleware enforces admin routes
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    setResetSending(false);
+    if (error) {
+      toast.error(error.message || "Failed to send reset email");
+      return;
     }
-    } catch (err) {
-      console.error('Auth error:', err);
-      toast.error('An unexpected error occurred. Please try again.');
-    } finally {
-      setIsLoading(false);
+    toast.success(`Reset link sent to ${email}`);
+    setResetMode(false);
+  };
+
+  const clearErr = (field: "email" | "password") => {
+    if (errors[field]) {
+      setErrors((p) => {
+        const n = { ...p };
+        delete n[field];
+        return n;
+      });
     }
   };
 
-  if (confirmationSent) {
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!validate()) {
+      toast.error("Fix errors before submitting");
+      return;
+    }
+    setLoading(true);
+    const supabase = createClient();
+    try {
+      if (mode === "signup") {
+        const fullName = [firstName, lastName].filter(Boolean).join(" ");
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              full_name: fullName || undefined,
+              license: license || undefined,
+            },
+          },
+        });
+        if (error) {
+          toast.error(error.message);
+          return;
+        }
+        if (!data.session) {
+          setConfirmationSent(true);
+          return;
+        }
+        toast.success("Account created. Welcome!");
+        onLogin();
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (error) {
+          toast.error("Invalid email or password");
+          setErrors({ email: " ", password: "Invalid email or password" });
+          return;
+        }
+        toast.success("Welcome back!");
+        onLogin();
+      }
+    } catch (err) {
+      console.error("Auth error:", err);
+      toast.error("Unexpected error, please try again");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (resetMode) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-teal-50 dark:from-gray-900 dark:to-gray-800 px-4">
-        <div className="w-full max-w-md bg-white dark:bg-gray-800 rounded-lg shadow-xl p-8 text-center">
-          <div className="bg-teal-600 dark:bg-teal-500 rounded-full p-3 mb-4 inline-flex">
-            <Activity className="h-12 w-12 text-white" />
+      <div className="min-h-screen flex items-center justify-center p-6 bg-muted/40">
+        <div className="w-full max-w-md rounded-lg border border-border bg-card p-8 shadow-card-md">
+          <div className="mb-6">
+            <LogoWord size={28} />
           </div>
-          <h2 className="text-gray-900 dark:text-white mb-2">Check your email</h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            Confirmation link sent to <strong>{email}</strong>. Click it to activate your account, then log in.
+          <h2 className="text-xl font-semibold tracking-tight mb-1">
+            Reset password
+          </h2>
+          <p className="text-sm text-muted-foreground mb-6">
+            Enter your account email. We&apos;ll send a secure reset link.
           </p>
-          <button
-            onClick={() => { setMode('login'); setConfirmationSent(false); }}
-            className="mt-6 text-sm text-teal-600 dark:text-teal-400 hover:underline"
-          >
-            Back to login
-          </button>
+          <Label htmlFor="reset-email" className="mb-1.5 block">
+            Email
+          </Label>
+          <div className="relative">
+            <Mail
+              size={14}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              id="reset-email"
+              type="email"
+              className="pl-9"
+              placeholder="you@clinic.com"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                clearErr("email");
+              }}
+              aria-invalid={!!errors.email?.trim()}
+            />
+          </div>
+          {errors.email?.trim() && (
+            <p className="mt-1.5 text-xs text-destructive">{errors.email}</p>
+          )}
+          <div className="flex gap-2 mt-6">
+            <Button
+              variant="brand"
+              className="flex-1 h-10"
+              disabled={resetSending}
+              onClick={handleReset}
+            >
+              {resetSending ? "Sending…" : "Send reset link"}
+            </Button>
+            <Button
+              variant="ghost"
+              className="h-10"
+              onClick={() => setResetMode(false)}
+              disabled={resetSending}
+            >
+              Back
+            </Button>
+          </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-teal-50 dark:from-gray-900 dark:to-gray-800 px-4">
-      <div className="w-full max-w-md">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-8">
-          <div className="flex flex-col items-center mb-8">
-            <div className="bg-teal-600 dark:bg-teal-500 rounded-full p-3 mb-4">
-              <Activity className="h-12 w-12 text-white" />
-            </div>
-            <h1 className="text-gray-900 dark:text-white mb-2">
-              {mode === 'login' ? 'Dermatologist Login' : 'Create Account'}
-            </h1>
-            <p className="text-sm text-gray-600 dark:text-gray-400 text-center">
-              Skin Lesion Classification Diagnostic Tool
-            </p>
+  if (confirmationSent) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-muted/40">
+        <div className="w-full max-w-md rounded-lg border border-border bg-card p-8 shadow-card-md text-center">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-brand/10 mb-4">
+            <CheckCircle2 className="w-7 h-7 text-brand" />
           </div>
+          <h2 className="text-xl font-semibold tracking-tight mb-1">
+            Check your email
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Confirmation link sent to <strong>{email}</strong>. Click it to
+            activate your account, then sign in.
+          </p>
+          <Button
+            variant="ghost"
+            className="mt-6 text-brand"
+            onClick={() => {
+              setMode("login");
+              setConfirmationSent(false);
+            }}
+          >
+            Back to sign in
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
-          <form onSubmit={handleSubmit} className="space-y-6">
+  const formCard = (
+    <div className="w-full">
+      <div className="mb-6">
+        <LogoWord size={28} />
+      </div>
+      <h1 className="text-2xl font-semibold tracking-tight mb-1">
+        {mode === "login" ? "Welcome back" : "Create your account"}
+      </h1>
+      <p className="text-sm text-muted-foreground mb-6">
+        {mode === "login"
+          ? "Sign in to continue. Your role will be loaded automatically."
+          : "Clinical access requires verification. A brief review follows sign-up."}
+      </p>
+
+      <form onSubmit={submit} className="flex flex-col gap-4">
+        {mode === "signup" && (
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="email" className="block text-sm text-gray-700 dark:text-gray-300 mb-2">
-                Email
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => { setEmail(e.target.value); clearFieldError('email'); }}
-                  placeholder="Enter your email"
-                  className={`w-full pl-10 pr-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 ${
-                    errors.email
-                      ? 'border-red-500 focus:ring-red-500'
-                      : 'border-gray-300 dark:border-gray-600 focus:ring-teal-500 dark:focus:ring-teal-400'
-                  }`}
-                />
-              </div>
-              {errors.email && errors.email.trim() && (
-                <div className="mt-2 flex items-center text-sm text-red-600 dark:text-red-400">
-                  <AlertCircle className="h-4 w-4 mr-1" />
-                  {errors.email}
-                </div>
-              )}
+              <Label htmlFor="fn" className="mb-1.5 block">
+                First name
+              </Label>
+              <Input
+                id="fn"
+                placeholder="Elena"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+              />
             </div>
-
             <div>
-              <label htmlFor="password" className="block text-sm text-gray-700 dark:text-gray-300 mb-2">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-                <input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => { setPassword(e.target.value); clearFieldError('password'); }}
-                  placeholder="Enter your password"
-                  className={`w-full pl-10 pr-4 py-3 border rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 ${
-                    errors.password
-                      ? 'border-red-500 focus:ring-red-500'
-                      : 'border-gray-300 dark:border-gray-600 focus:ring-teal-500 dark:focus:ring-teal-400'
-                  }`}
-                />
-              </div>
-              {errors.password && (
-                <div className="mt-2 flex items-center text-sm text-red-600 dark:text-red-400">
-                  <AlertCircle className="h-4 w-4 mr-1" />
-                  {errors.password}
-                </div>
-              )}
+              <Label htmlFor="ln" className="mb-1.5 block">
+                Last name
+              </Label>
+              <Input
+                id="ln"
+                placeholder="Voss"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+              />
             </div>
+          </div>
+        )}
 
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 dark:bg-teal-500 dark:hover:bg-teal-600 text-white rounded-lg transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isLoading
-                ? mode === 'login' ? 'Logging in...' : 'Creating account...'
-                : mode === 'login' ? 'Login' : 'Create Account'}
-            </button>
-          </form>
+        <div>
+          <Label htmlFor="email" className="mb-1.5 block">
+            Email
+          </Label>
+          <div className="relative">
+            <Mail
+              size={14}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              id="email"
+              type="email"
+              className="pl-9"
+              placeholder="you@clinic.com"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                clearErr("email");
+              }}
+              aria-invalid={!!errors.email?.trim()}
+            />
+          </div>
+          {errors.email?.trim() && (
+            <p className="mt-1.5 text-xs text-destructive">{errors.email}</p>
+          )}
+        </div>
 
-          <div className="mt-6 text-center">
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              Secure medical-grade authentication system
-            </p>
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <Label htmlFor="pw">Password</Label>
+            {mode === "login" && (
+              <button
+                type="button"
+                className="text-xs text-brand cursor-pointer"
+                onClick={() => setResetMode(true)}
+              >
+                Forgot?
+              </button>
+            )}
+          </div>
+          <div className="relative">
+            <Lock
+              size={14}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              id="pw"
+              type={showPw ? "text" : "password"}
+              className="pl-9 pr-9"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                clearErr("password");
+              }}
+              aria-invalid={!!errors.password}
+            />
             <button
               type="button"
-              onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setErrors({}); }}
-              className="mt-3 text-sm text-teal-600 dark:text-teal-400 hover:underline"
+              onClick={() => setShowPw((p) => !p)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+              tabIndex={-1}
+              aria-label={showPw ? "Hide password" : "Show password"}
             >
-              {mode === 'login' ? "Don't have an account? Sign up" : 'Already have an account? Log in'}
+              {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
+          {errors.password && (
+            <p className="mt-1.5 text-xs text-destructive">{errors.password}</p>
+          )}
         </div>
+
+        {mode === "login" && (
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <Checkbox
+              checked={remember}
+              onCheckedChange={(v) => setRemember(v === true)}
+            />
+            <span className="text-sm">Keep me signed in on this device</span>
+          </label>
+        )}
+
+        {mode === "signup" && (
+          <div>
+            <Label htmlFor="lic" className="mb-1.5 block">
+              Medical license number
+            </Label>
+            <Input
+              id="lic"
+              placeholder="e.g. MD-28471"
+              value={license}
+              onChange={(e) => setLicense(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground mt-1.5">
+              We verify against registry databases before granting access.
+            </p>
+          </div>
+        )}
+
+        <Button
+          type="submit"
+          variant="brand"
+          className="w-full h-10"
+          disabled={loading}
+        >
+          {loading
+            ? mode === "login"
+              ? "Signing in…"
+              : "Creating account…"
+            : mode === "login"
+              ? "Sign in"
+              : "Request access"}
+          {!loading && <ArrowRight size={14} />}
+        </Button>
+      </form>
+
+      <div className="flex items-center justify-between mt-6 pt-4 border-t border-border">
+        <span className="text-sm text-muted-foreground">
+          {mode === "login"
+            ? "Don't have access?"
+            : "Already have an account?"}
+        </span>
+        <button
+          type="button"
+          className="text-sm font-medium text-brand"
+          onClick={() => {
+            setMode(mode === "login" ? "signup" : "login");
+            setErrors({});
+          }}
+        >
+          {mode === "login" ? "Request access" : "Sign in"}
+        </button>
+      </div>
+    </div>
+  );
+  // Note: `formCard` is a JSX expression, not a component. Defining it as a
+  // component (function) would create a new reference each render, causing
+  // React to unmount/remount the inputs and lose focus on every keystroke.
+
+  return (
+    <div className="min-h-screen flex">
+      {/* Left: hero */}
+      <div
+        className="relative overflow-hidden hidden md:flex flex-col justify-between text-white"
+        style={{
+          flex: "1 1 55%",
+          minWidth: 0,
+          padding: "48px 56px",
+          background:
+            "linear-gradient(135deg, hsl(var(--brand)) 0%, oklch(0.35 0.08 210) 100%)",
+        }}
+      >
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: -100,
+            right: -100,
+            width: 380,
+            height: 380,
+            borderRadius: "50%",
+            border: "1px solid rgba(255,255,255,0.15)",
+          }}
+        />
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: -40,
+            right: -40,
+            width: 260,
+            height: 260,
+            borderRadius: "50%",
+            border: "1px solid rgba(255,255,255,0.2)",
+          }}
+        />
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            top: 20,
+            right: 20,
+            width: 160,
+            height: 160,
+            borderRadius: "50%",
+            border: "1px solid rgba(255,255,255,0.3)",
+          }}
+        />
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            bottom: -120,
+            left: -120,
+            width: 400,
+            height: 400,
+            borderRadius: "50%",
+            background:
+              "radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%)",
+          }}
+        />
+
+        <div className="relative z-10">
+          <LogoWord size={30} />
+        </div>
+
+        <div className="relative z-10 max-w-lg">
+          <div
+            className="inline-flex items-center gap-2 mb-5 px-3 py-1 rounded-full"
+            style={{
+              background: "rgba(255,255,255,0.12)",
+              border: "1px solid rgba(255,255,255,0.2)",
+            }}
+          >
+            <span
+              className="pulse-dot rounded-full inline-block"
+              style={{
+                width: 6,
+                height: 6,
+                background: "oklch(0.85 0.15 140)",
+              }}
+            />
+            {/* MOCK: model stats copy */}
+            <span className="text-xs mono tracking-wide">
+              MODEL v3.2.1 · 91.3% ACCURACY
+            </span>
+          </div>
+          <h2 className="text-4xl font-semibold tracking-tight mb-4 leading-tight">
+            Decision support for
+            <br />
+            dermatologic oncology.
+          </h2>
+          <p
+            className="text-base opacity-80 leading-relaxed mb-8"
+            style={{ maxWidth: 440 }}
+          >
+            8-class ISIC classification with explainable Grad-CAM attribution.
+            Built for clinicians who need confidence, not just a prediction.
+          </p>
+
+          <div className="grid grid-cols-3 gap-4 mt-10">
+            {/* MOCK: hero stats */}
+            {[
+              { label: "Lesions triaged", value: "142,800" },
+              { label: "Partner clinics", value: "38" },
+              { label: "Avg. inference", value: "340ms" },
+            ].map((s) => (
+              <div key={s.label}>
+                <div className="text-2xl font-semibold mono">{s.value}</div>
+                <div className="text-xs opacity-70 mt-1">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="relative z-10 text-xs opacity-60">
+          Not a diagnostic device. Intended for clinical decision support only.
+        </div>
+      </div>
+
+      {/* Right: form */}
+      <div
+        className="flex items-center justify-center p-6 bg-background flex-1"
+        style={{ minWidth: 380 }}
+      >
+        <div className="w-full max-w-md">{formCard}</div>
       </div>
     </div>
   );

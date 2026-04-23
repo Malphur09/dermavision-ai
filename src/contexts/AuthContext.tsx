@@ -1,6 +1,6 @@
 "use client";
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { User } from '@supabase/supabase-js';
+import { Session, User } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
 
 type Role = 'doctor' | 'admin';
@@ -22,28 +22,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const supabase = createClient();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const withTimeout = <T,>(p: PromiseLike<T>, ms: number): Promise<T> =>
+      Promise.race([
+        Promise.resolve(p),
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error('profile-fetch-timeout')), ms)
+        ),
+      ]);
+
+    const fetchRole = async (userId: string): Promise<Role | null> => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const result = await withTimeout(
+            supabase.from('profiles').select('role').eq('id', userId).maybeSingle(),
+            5000
+          );
+          const { data: profile, error } = result;
+          if (!error && profile?.role) return profile.role as Role;
+          if (error) await new Promise((r) => setTimeout(r, 400));
+        } catch {
+          await new Promise((r) => setTimeout(r, 400));
+        }
+      }
+      return null;
+    };
+
+    const resolveSession = async (session: Session | null) => {
       const currentUser = session?.user ?? null;
       setUser(currentUser);
-
       try {
-        if (currentUser) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', currentUser.id)
-            .maybeSingle();
-          setRole((profile?.role as Role) ?? 'doctor');
-        } else {
-          setRole(null);
-        }
+        const nextRole = currentUser ? await fetchRole(currentUser.id) : null;
+        setRole(nextRole);
       } catch {
-        // Profile fetch failed — default to doctor role
-        if (currentUser) setRole('doctor');
-        else setRole(null);
+        setRole(null);
       } finally {
         setLoading(false);
       }
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      void resolveSession(data.session);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      void resolveSession(session);
     });
 
     return () => subscription.unsubscribe();

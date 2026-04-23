@@ -1,261 +1,923 @@
 "use client";
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Save, FileDown, Clock, AlertCircle } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowLeft,
+  Check,
+  Download,
+  FileText,
+  Info,
+  Mail,
+  MoreHorizontal,
+  Save,
+  Sparkles,
+} from "lucide-react";
+import { toast } from "sonner";
 
-const IMAGES_BUCKET = 'dermoscopy-images';
+import { createClient } from "@/lib/supabase/client";
+import { logPhiAccess } from "@/lib/audit";
+import { PageHeader } from "@/components/primitives/PageHeader";
+import { Alert } from "@/components/primitives/Alert";
+import { Avatar } from "@/components/primitives/Avatar";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
-const F1_SCORES: Record<string, number> = {
-  'Melanoma': 0.89,
-  'Melanocytic Nevus': 0.91,
-  'Basal Cell Carcinoma': 0.87,
-  'Actinic Keratosis': 0.85,
-  'Benign Keratosis': 0.88,
-  'Dermatofibroma': 0.82,
-  'Vascular Lesion': 0.84,
-  'Squamous Cell Carcinoma': 0.83,
+const IMAGES_BUCKET = "dermoscopic-images";
+const HEATMAPS_BUCKET = "heatmaps";
+
+const ISIC_CODE: Record<string, string> = {
+  Melanoma: "MEL",
+  "Melanocytic Nevus": "NV",
+  "Basal Cell Carcinoma": "BCC",
+  "Actinic Keratosis": "AK",
+  "Benign Keratosis": "BKL",
+  Dermatofibroma: "DF",
+  "Vascular Lesion": "VASC",
+  "Squamous Cell Carcinoma": "SCC",
 };
 
-const CLINICAL_NOTES: Record<string, string> = {
-  'Melanoma': 'High confidence melanoma detection. Recommend immediate dermatological consultation and biopsy for histopathological confirmation.',
-  'Squamous Cell Carcinoma': 'High confidence squamous cell carcinoma detection. Urgent dermatological evaluation recommended.',
-  'Basal Cell Carcinoma': 'Basal cell carcinoma suspected. Dermatological consultation recommended for treatment planning.',
-  'Actinic Keratosis': 'Actinic keratosis detected. Monitor closely; consider cryotherapy or topical treatment.',
-  'Melanocytic Nevus': 'Benign melanocytic nevus. Routine monitoring recommended.',
-  'Benign Keratosis': 'Benign keratosis-like lesion. No urgent action required.',
-  'Dermatofibroma': 'Dermatofibroma suspected. Benign; no treatment required unless symptomatic.',
-  'Vascular Lesion': 'Vascular lesion detected. Clinical correlation recommended.',
+const CLASS_RISK: Record<string, "high" | "moderate" | "benign"> = {
+  Melanoma: "high",
+  "Squamous Cell Carcinoma": "high",
+  "Basal Cell Carcinoma": "high",
+  "Actinic Keratosis": "moderate",
+  "Melanocytic Nevus": "benign",
+  "Benign Keratosis": "benign",
+  Dermatofibroma: "benign",
+  "Vascular Lesion": "benign",
+};
+
+const RISK_META = {
+  high: {
+    label: "High risk",
+    color: "hsl(var(--destructive))",
+    bg: "hsl(var(--destructive) / 0.1)",
+  },
+  moderate: {
+    label: "Moderate",
+    color: "hsl(var(--warning))",
+    bg: "hsl(var(--warning) / 0.12)",
+  },
+  benign: {
+    label: "Benign",
+    color: "hsl(var(--success))",
+    bg: "hsl(var(--success) / 0.12)",
+  },
+};
+
+const NEXT_STEPS: Record<string, string[]> = {
+  MEL: [
+    "Refer to dermatologic oncology within 1–2 weeks",
+    "Excisional biopsy with 2mm margin recommended",
+    "Discuss sentinel lymph node mapping if Breslow > 0.8mm",
+    "Total body photography for baseline surveillance",
+  ],
+  BCC: [
+    "Shave or punch biopsy for histologic confirmation",
+    "Mohs surgery consideration for high-risk sites",
+    "Counsel on photoprotection and self-surveillance",
+  ],
+  SCC: [
+    "Punch biopsy for confirmation of diagnosis",
+    "Assess for perineural involvement on history",
+    "Surgical excision with 4–6mm margin",
+  ],
+  AK: [
+    "Cryotherapy or topical 5-FU first-line",
+    "Sun protection counseling",
+    "Annual full-body skin examination",
+  ],
+  NV: [
+    "Routine surveillance — photo record for comparison",
+    "Patient education on ABCDE self-monitoring",
+    "Re-evaluate in 6–12 months if stable",
+  ],
+  BKL: [
+    "Reassurance — benign process",
+    "Cosmetic removal optional (cryotherapy/curettage)",
+  ],
+  DF: [
+    "Reassurance — characteristic dimple sign",
+    "Excision only if symptomatic or cosmetic concern",
+  ],
+  VASC: [
+    "Reassurance — benign vascular lesion",
+    "Cosmetic laser therapy available if desired",
+  ],
 };
 
 interface CaseSession {
   caseId: string;
-  patientId: string;
-  patientName: string;
+  patientLabel?: string;
+  patientId?: string;
+  patientName?: string;
   predictedClass: string;
   probabilities: Record<string, number>;
   confidence: number | null;
   riskLevel: string;
   lesionSite: string;
   storagePath: string;
+  heatmapDataUrl: string | null;
+  status?: string;
+  notes?: string | null;
 }
+
+const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
+  pending: {
+    label: "Awaiting review",
+    color: "hsl(var(--warning))",
+    bg: "hsl(var(--warning) / 0.12)",
+  },
+  reviewed: {
+    label: "Reviewed",
+    color: "hsl(var(--success))",
+    bg: "hsl(var(--success) / 0.12)",
+  },
+  complete: {
+    label: "Complete",
+    color: "hsl(var(--success))",
+    bg: "hsl(var(--success) / 0.12)",
+  },
+};
 
 export function DiagnosisResults() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const paramCaseId = searchParams.get("caseId");
   const [caseData, setCaseData] = useState<CaseSession | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [loadingImage, setLoadingImage] = useState(true);
+  const [heatmapDataUrl, setHeatmapDataUrl] = useState<string | null>(null);
+  const [heatmapPending, setHeatmapPending] = useState(true);
+  const [heatmapOn, setHeatmapOn] = useState(true);
+  const [blend, setBlend] = useState(50);
+  const [status, setStatus] = useState<string>("pending");
+  const [notes, setNotes] = useState<string>("");
+  const [initialNotes, setInitialNotes] = useState<string>("");
+  const [savingReview, setSavingReview] = useState(false);
+  const [savingNotes, setSavingNotes] = useState(false);
 
   useEffect(() => {
-    const raw = sessionStorage.getItem('lastCase');
-    if (!raw) { setLoadingImage(false); return; }
-
-    let parsed: CaseSession;
-    try { parsed = JSON.parse(raw); } catch { setLoadingImage(false); return; }
-    setCaseData(parsed);
-
     const supabase = createClient();
+
+    const hydrateFromRow = async (row: {
+      id: string;
+      image_url: string | null;
+      gradcam_url: string | null;
+      predicted_class: string | null;
+      probabilities: Record<string, number> | null;
+      confidence: number | null;
+      risk_level: string | null;
+      lesion_site: string | null;
+      status: string | null;
+      notes: string | null;
+      patients: { patient_id: string | null; name: string | null } | null;
+    }) => {
+      const patientId = row.patients?.patient_id ?? undefined;
+      const patientName = row.patients?.name ?? undefined;
+      const parsed: CaseSession = {
+        caseId: row.id,
+        patientId,
+        patientName,
+        patientLabel: [patientId, patientName].filter(Boolean).join(" · "),
+        predictedClass: row.predicted_class ?? "Unknown",
+        probabilities: row.probabilities ?? {},
+        confidence: row.confidence,
+        riskLevel: row.risk_level ?? "Benign",
+        lesionSite: row.lesion_site ?? "",
+        storagePath: row.image_url ?? "",
+        heatmapDataUrl: null,
+        status: row.status ?? "pending",
+        notes: row.notes,
+      };
+      setCaseData(parsed);
+      setStatus(parsed.status ?? "pending");
+      setNotes(parsed.notes ?? "");
+      setInitialNotes(parsed.notes ?? "");
+
+      if (parsed.storagePath) {
+        const { data: signed } = await supabase.storage
+          .from(IMAGES_BUCKET)
+          .createSignedUrl(parsed.storagePath, 3600);
+        if (signed?.signedUrl) setImageUrl(signed.signedUrl);
+      }
+      setLoadingImage(false);
+
+      if (row.gradcam_url) {
+        const { data: signed } = await supabase.storage
+          .from(HEATMAPS_BUCKET)
+          .createSignedUrl(row.gradcam_url, 3600);
+        if (signed?.signedUrl) {
+          setHeatmapDataUrl(signed.signedUrl);
+          setHeatmapPending(false);
+        }
+      } else {
+        setHeatmapPending(false);
+      }
+
+      void logPhiAccess({
+        resource_type: "case",
+        resource_id: parsed.caseId,
+        action: "viewed",
+      });
+    };
+
+    const loadById = async (id: string) => {
+      const { data, error } = await supabase
+        .from("cases")
+        .select(
+          "id, image_url, gradcam_url, predicted_class, probabilities, confidence, risk_level, lesion_site, status, notes, patients(patient_id, name)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+      if (error || !data) {
+        setLoadingImage(false);
+        setHeatmapPending(false);
+        return;
+      }
+      const row = data as unknown as Parameters<typeof hydrateFromRow>[0];
+      await hydrateFromRow(row);
+    };
+
+    if (paramCaseId) {
+      void loadById(paramCaseId);
+      return;
+    }
+
+    const raw = sessionStorage.getItem("lastCase");
+    if (!raw) {
+      setLoadingImage(false);
+      setHeatmapPending(false);
+      return;
+    }
+    let parsed: CaseSession;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      setLoadingImage(false);
+      setHeatmapPending(false);
+      return;
+    }
+    setCaseData(parsed);
+    if (parsed.heatmapDataUrl) {
+      setHeatmapDataUrl(parsed.heatmapDataUrl);
+      setHeatmapPending(false);
+    }
     supabase.storage
       .from(IMAGES_BUCKET)
       .createSignedUrl(parsed.storagePath, 3600)
-      .then(({ data }) => { if (data?.signedUrl) setImageUrl(data.signedUrl); })
+      .then(({ data }) => {
+        if (data?.signedUrl) setImageUrl(data.signedUrl);
+      })
       .finally(() => setLoadingImage(false));
-  }, []);
+
+    supabase
+      .from("cases")
+      .select("gradcam_url, status, notes")
+      .eq("id", parsed.caseId)
+      .maybeSingle()
+      .then(async ({ data }) => {
+        if (!data) return;
+        if (data.status) setStatus(data.status);
+        if (typeof data.notes === "string") {
+          setNotes(data.notes);
+          setInitialNotes(data.notes);
+        }
+        if (data.gradcam_url) {
+          const { data: signed } = await supabase.storage
+            .from(HEATMAPS_BUCKET)
+            .createSignedUrl(data.gradcam_url, 3600);
+          if (signed?.signedUrl) {
+            setHeatmapDataUrl(signed.signedUrl);
+            setHeatmapPending(false);
+          }
+        }
+      });
+
+    void logPhiAccess({
+      resource_type: "case",
+      resource_id: parsed.caseId,
+      action: "viewed",
+    });
+  }, [paramCaseId]);
+
+  const handleMarkReviewed = async () => {
+    if (!caseData || status === "reviewed" || status === "complete") return;
+    setSavingReview(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("cases")
+      .update({ status: "reviewed" })
+      .eq("id", caseData.caseId);
+    setSavingReview(false);
+    if (error) {
+      toast.error("Failed to mark reviewed");
+      return;
+    }
+    setStatus("reviewed");
+    toast.success("Case marked as reviewed");
+    void logPhiAccess({
+      resource_type: "case",
+      resource_id: caseData.caseId,
+      action: "reviewed",
+    });
+  };
+
+  const handleSaveNotes = async () => {
+    if (!caseData || notes === initialNotes || savingNotes) return;
+    setSavingNotes(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("cases")
+      .update({ notes })
+      .eq("id", caseData.caseId);
+    setSavingNotes(false);
+    if (error) {
+      toast.error("Failed to save notes");
+      return;
+    }
+    setInitialNotes(notes);
+    toast.success("Notes saved");
+  };
+
+  useEffect(() => {
+    if (!heatmapPending || !caseData) return;
+    const supabase = createClient();
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from("cases")
+        .select("gradcam_url")
+        .eq("id", caseData.caseId)
+        .maybeSingle();
+      if (data?.gradcam_url) {
+        const { data: signed } = await supabase.storage
+          .from(HEATMAPS_BUCKET)
+          .createSignedUrl(data.gradcam_url, 3600);
+        if (signed?.signedUrl) {
+          setHeatmapDataUrl(signed.signedUrl);
+          setHeatmapPending(false);
+          clearInterval(interval);
+        }
+      }
+    }, 1500);
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+      setHeatmapPending(false);
+      toast.warning("Heatmap unavailable — generation timed out");
+    }, 30_000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [heatmapPending, caseData]);
+
+  const ranked = useMemo(() => {
+    if (!caseData) return [];
+    return Object.entries(caseData.probabilities)
+      .map(([cls, p]) => ({
+        name: cls,
+        code: ISIC_CODE[cls] ?? cls,
+        p,
+        risk: CLASS_RISK[cls] ?? "benign",
+      }))
+      .sort((a, b) => b.p - a.p);
+  }, [caseData]);
 
   if (!caseData) {
     return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex flex-col items-center justify-center py-24 space-y-4">
-          <AlertCircle className="h-12 w-12 text-gray-400" />
-          <p className="text-gray-600 dark:text-gray-400">No case data found. Run a diagnosis first.</p>
-          <button
-            onClick={() => router.push('/diagnostic')}
-            className="px-6 py-3 bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition-colors"
-          >
-            Go to Diagnostic
-          </button>
+      <div className="p-8 max-w-7xl mx-auto">
+        <div className="flex flex-col items-center justify-center py-24 gap-4">
+          <AlertCircle className="h-12 w-12 text-muted-foreground" />
+          <p className="text-muted-foreground">
+            No case data found. Run a diagnosis first.
+          </p>
+          <Button variant="brand" onClick={() => router.push("/diagnostic")}>
+            Go to diagnostic
+          </Button>
         </div>
       </div>
     );
   }
 
-  const ranked = Object.entries(caseData.probabilities)
-    .sort(([, a], [, b]) => b - a)
-    .map(([cls, prob], idx) => ({
-      class: cls,
-      probability: Math.round(prob * 10000) / 100,
-      f1Score: F1_SCORES[cls] ?? 0.80,
-      rank: idx + 1,
-    }));
-
-  const clinicalNote = CLINICAL_NOTES[caseData.predictedClass] ?? 'Clinical correlation recommended.';
-  const isHighRisk = caseData.riskLevel === 'High Risk';
-
-  const ImageSlot = ({ label, pending }: { label: string; pending?: boolean }) => (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-      <h3 className="text-gray-900 dark:text-white mb-4">{label}</h3>
-      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden relative flex items-center justify-center">
-        {loadingImage ? (
-          <span className="text-gray-400 text-sm">Loading...</span>
-        ) : imageUrl ? (
-          <img
-            src={imageUrl}
-            alt={label}
-            className={`w-full h-full object-cover${pending ? ' opacity-70' : ''}`}
-          />
-        ) : (
-          <span className="text-gray-400 text-sm">Image unavailable</span>
-        )}
-        {pending && (
-          <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-            Pending
-          </div>
-        )}
-      </div>
-      {pending && (
-        <div className="mt-4 flex items-center space-x-2 text-xs">
-          <div className="w-8 h-3 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-500 rounded"></div>
-          <span className="text-gray-600 dark:text-gray-400">Low → High Activation</span>
+  if (ranked.length === 0) {
+    return (
+      <div className="p-8 max-w-7xl mx-auto">
+        <div className="flex flex-col items-center justify-center py-24 gap-4">
+          <AlertCircle className="h-12 w-12 text-muted-foreground" />
+          <p className="text-muted-foreground">
+            Case missing class probabilities — rerun prediction.
+          </p>
+          <Button variant="brand" onClick={() => router.push("/diagnostic")}>
+            New scan
+          </Button>
         </div>
-      )}
-    </div>
-  );
+      </div>
+    );
+  }
+
+  const top = ranked[0];
+  const second = ranked[1];
+  const risk = RISK_META[top.risk];
+  const isHighRisk = top.risk === "high";
+  const nextSteps = NEXT_STEPS[top.code] ?? [];
+  const patientLabel =
+    caseData.patientLabel ||
+    [caseData.patientId, caseData.patientName].filter(Boolean).join(" · ") ||
+    "Patient";
+  const patientDisplayName = caseData.patientName || patientLabel.split("·").slice(-1)[0].trim();
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="mb-8">
-        <h1 className="text-gray-900 dark:text-white mb-2">
-          Classification Analysis & Interpretability
-        </h1>
-        <p className="text-gray-600 dark:text-gray-400">
-          Deep learning model output with visual explanation and confidence scores
+    <div className="p-8 max-w-7xl mx-auto">
+      <PageHeader
+        title="Analysis results"
+        subtitle={`Case ${caseData.caseId.slice(0, 8)} · ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}`}
+        breadcrumb={["Doctor", "Results"]}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => router.push("/diagnostic")}>
+              <ArrowLeft size={14} /> New scan
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => router.push("/report")}
+              title="Generate report"
+            >
+              <Download size={14} /> Export PDF
+            </Button>
+            <Button
+              variant="brand"
+              onClick={handleMarkReviewed}
+              disabled={
+                savingReview || status === "reviewed" || status === "complete"
+              }
+            >
+              <Check size={14} />
+              {status === "reviewed" || status === "complete"
+                ? "Reviewed"
+                : savingReview
+                ? "Saving…"
+                : "Mark reviewed"}
+            </Button>
+          </>
+        }
+      />
+
+      {isHighRisk && (
+        <div className="mb-5">
+          <Alert
+            variant="danger"
+            title="High-risk prediction — clinical review recommended"
+          >
+            Confidence{" "}
+            <strong>
+              {(top.p * 100).toFixed(1)}% for {top.name}
+            </strong>
+            . Expedite referral and biopsy per guidance below.
+          </Alert>
+        </div>
+      )}
+
+      <div className="grid gap-5" style={{ gridTemplateColumns: "1.3fr 1fr" }}>
+        <div className="flex flex-col gap-5">
+          <ImagePanel
+            imageUrl={imageUrl}
+            loadingImage={loadingImage}
+            heatmapDataUrl={heatmapDataUrl}
+            heatmapPending={heatmapPending}
+            heatmapOn={heatmapOn}
+            setHeatmapOn={setHeatmapOn}
+            blend={blend}
+            setBlend={setBlend}
+          />
+          <ProbBars ranked={ranked} topColor={risk.color} />
+        </div>
+        <div className="flex flex-col gap-5">
+          <TopPrediction top={top} second={second} risk={risk} />
+          <PatientCard
+            name={patientDisplayName}
+            label={patientLabel}
+            lesionSite={caseData.lesionSite}
+            status={status}
+          />
+          <NextStepsCard steps={nextSteps} />
+          <NotesCard
+            notes={notes}
+            setNotes={setNotes}
+            onSave={handleSaveNotes}
+            saving={savingNotes}
+            dirty={notes !== initialNotes}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NotesCard({
+  notes,
+  setNotes,
+  onSave,
+  saving,
+  dirty,
+}: {
+  notes: string;
+  setNotes: (v: string) => void;
+  onSave: () => void;
+  saving: boolean;
+  dirty: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold">Clinical notes</h3>
+        {dirty && (
+          <span className="text-[11px] mono text-muted-foreground">
+            unsaved
+          </span>
+        )}
+      </div>
+      <Textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        onBlur={onSave}
+        placeholder="Clinical impression, histology correlation, follow-up plan…"
+        rows={5}
+        className="resize-none text-sm"
+      />
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-[11px] text-muted-foreground">
+          Auto-saves on blur · stored per case
+        </span>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onSave}
+          disabled={!dirty || saving}
+        >
+          <Save size={12} /> {saving ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function TopPrediction({
+  top,
+  second,
+  risk,
+}: {
+  top: { name: string; code: string; p: number };
+  second?: { p: number };
+  risk: (typeof RISK_META)[keyof typeof RISK_META];
+}) {
+  const margin = second ? (top.p - second.p) * 100 : 0;
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground mb-3 uppercase tracking-wide mono">
+        <Sparkles size={12} /> Top prediction
+      </div>
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h2 className="text-3xl font-semibold tracking-tight mb-1">
+            {top.name}
+          </h2>
+          <div className="text-sm text-muted-foreground mono">
+            ISIC · {top.code}
+          </div>
+        </div>
+        <span
+          className="inline-flex items-center gap-1 rounded px-3 py-1 text-xs font-medium"
+          style={{
+            background: risk.bg,
+            color: risk.color,
+            border: `1px solid ${risk.color}33`,
+          }}
+        >
+          <AlertTriangle size={11} /> {risk.label}
+        </span>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <div
+          className="text-5xl font-semibold mono tracking-tight"
+          style={{ color: risk.color }}
+        >
+          {(top.p * 100).toFixed(1)}%
+        </div>
+        <div className="text-sm text-muted-foreground">confidence</div>
+      </div>
+      <div
+        className="mt-3 rounded-full overflow-hidden"
+        style={{ height: 8, background: "hsl(var(--muted))" }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${top.p * 100}%`,
+            background: risk.color,
+            transition: "width 0.6s ease",
+          }}
+        />
+      </div>
+      <div className="text-xs text-muted-foreground mt-2 mono">
+        Margin over 2nd:{" "}
+        <span className="font-medium text-foreground">+{margin.toFixed(1)}pp</span>
+      </div>
+    </div>
+  );
+}
+
+function ProbBars({
+  ranked,
+  topColor,
+}: {
+  ranked: { name: string; code: string; p: number; risk: string }[];
+  topColor: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="font-semibold">All 8 class probabilities</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            ISIC 2019 dermatoscopic classes · softmax output
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2.5">
+        {ranked.map((c, i) => (
+          <div key={c.code} className="flex items-center gap-3">
+            <div className="flex-shrink-0 w-5 text-right">
+              <span className="text-xs mono text-muted-foreground">{i + 1}</span>
+            </div>
+            <div style={{ width: 170 }}>
+              <div className="text-sm font-medium truncate">{c.name}</div>
+              <div className="text-xs mono text-muted-foreground">{c.code}</div>
+            </div>
+            <div
+              className="flex-1 relative rounded overflow-hidden"
+              style={{ height: 10, background: "hsl(var(--muted))" }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${c.p * 100}%`,
+                  background:
+                    i === 0 ? topColor : "hsl(var(--muted-foreground) / 0.4)",
+                  transition: "width 0.6s ease",
+                }}
+              />
+            </div>
+            <div className="mono text-sm font-medium w-16 text-right">
+              {(c.p * 100).toFixed(c.p < 0.01 ? 2 : 1)}%
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ImagePanel({
+  imageUrl,
+  loadingImage,
+  heatmapDataUrl,
+  heatmapPending,
+  heatmapOn,
+  setHeatmapOn,
+  blend,
+  setBlend,
+}: {
+  imageUrl: string | null;
+  loadingImage: boolean;
+  heatmapDataUrl: string | null;
+  heatmapPending: boolean;
+  heatmapOn: boolean;
+  setHeatmapOn: (v: boolean) => void;
+  blend: number;
+  setBlend: (v: number) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="font-semibold">Visual analysis</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Grad-CAM attribution
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Heatmap</span>
+          <Switch
+            checked={heatmapOn}
+            onCheckedChange={setHeatmapOn}
+            disabled={!heatmapDataUrl}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <ImageSlot label="Original" src={imageUrl} pending={loadingImage} />
+        <div>
+          <div className="text-xs text-muted-foreground uppercase tracking-wide mono mb-2">
+            Grad-CAM overlay
+          </div>
+          <div
+            className="relative aspect-square rounded-md overflow-hidden bg-muted"
+            style={{
+              borderRadius: "calc(var(--radius) - 2px)",
+            }}
+          >
+            {imageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={imageUrl}
+                alt="Original"
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+                {loadingImage ? "Loading…" : "Image unavailable"}
+              </div>
+            )}
+            {heatmapDataUrl && heatmapOn && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={heatmapDataUrl}
+                alt="Grad-CAM overlay"
+                className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                style={{ opacity: blend / 100 }}
+              />
+            )}
+            {heatmapPending && (
+              <div className="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] mono px-2 py-1 rounded">
+                Generating…
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5 pt-5 border-t border-border">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium">
+            Blend: original ↔ heatmap
+          </span>
+          <span className="mono text-xs text-muted-foreground">{blend}%</span>
+        </div>
+        <Slider
+          value={[blend]}
+          min={0}
+          max={100}
+          step={1}
+          onValueChange={(v) => setBlend(v[0])}
+          disabled={!heatmapDataUrl || !heatmapOn}
+        />
+        <div className="flex items-center justify-between mt-1 text-xs mono text-muted-foreground">
+          <span>Original</span>
+          <span>50 / 50</span>
+          <span>Heatmap</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 mt-4 p-3 rounded bg-muted/50">
+        <Info
+          size={14}
+          className="text-muted-foreground flex-shrink-0"
+        />
+        <p className="text-xs text-muted-foreground">
+          Warm regions indicate where the model focused attention.
+          {/* MOCK: colormap selector + attribution heuristic — backend returns fixed jet overlay */}
         </p>
       </div>
+    </div>
+  );
+}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <div className="lg:col-span-1 space-y-6">
-          <ImageSlot label="Original Image" />
-          <ImageSlot label="Grad-CAM Visualization" pending />
+function ImageSlot({
+  label,
+  src,
+  pending,
+}: {
+  label: string;
+  src: string | null;
+  pending?: boolean;
+}) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground uppercase tracking-wide mono mb-2">
+        {label}
+      </div>
+      <div className="aspect-square rounded-md overflow-hidden bg-muted flex items-center justify-center">
+        {pending ? (
+          <span className="text-xs text-muted-foreground">Loading…</span>
+        ) : src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={label}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <span className="text-xs text-muted-foreground">Unavailable</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PatientCard({
+  name,
+  label,
+  lesionSite,
+  status,
+}: {
+  name: string;
+  label: string;
+  lesionSite: string;
+  status: string;
+}) {
+  const meta = STATUS_META[status] ?? STATUS_META.pending;
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-center gap-3 mb-4">
+        <Avatar name={name} size={44} />
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold truncate">{name}</div>
+          <div className="text-xs text-muted-foreground mono truncate">{label}</div>
         </div>
-
-        <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-          <h3 className="text-gray-900 dark:text-white mb-6">Classification Results</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700">
-                  <th className="text-left py-3 px-4 text-sm text-gray-700 dark:text-gray-300">Rank</th>
-                  <th className="text-left py-3 px-4 text-sm text-gray-700 dark:text-gray-300">Classification</th>
-                  <th className="text-left py-3 px-4 text-sm text-gray-700 dark:text-gray-300">Probability</th>
-                  <th className="text-left py-3 px-4 text-sm text-gray-700 dark:text-gray-300">F1-Score</th>
-                  <th className="text-left py-3 px-4 text-sm text-gray-700 dark:text-gray-300">Confidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ranked.map((result) => {
-                  const isPredicted = result.rank === 1;
-                  return (
-                    <tr
-                      key={result.class}
-                      className={`border-b border-gray-100 dark:border-gray-700 ${
-                        isPredicted ? 'bg-red-50 dark:bg-red-900/20' : ''
-                      }`}
-                    >
-                      <td className="py-4 px-4">
-                        <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-sm ${
-                          isPredicted
-                            ? 'bg-red-600 text-white'
-                            : 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300'
-                        }`}>
-                          {result.rank}
-                        </span>
-                      </td>
-                      <td className="py-4 px-4">
-                        <span className={isPredicted ? 'text-red-700 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}>
-                          {result.class}
-                        </span>
-                        {isPredicted && (
-                          <span className="ml-2 inline-block px-2 py-1 bg-red-600 text-white text-xs rounded">
-                            PREDICTED
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-4 px-4 text-gray-900 dark:text-gray-100">
-                        {result.probability.toFixed(1)}%
-                      </td>
-                      <td className="py-4 px-4 text-gray-900 dark:text-gray-100">
-                        {result.f1Score.toFixed(2)}
-                      </td>
-                      <td className="py-4 px-4">
-                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
-                          <div
-                            className={`h-2.5 rounded-full ${isPredicted ? 'bg-red-600' : 'bg-teal-500'}`}
-                            style={{ width: `${Math.min(result.probability, 100)}%` }}
-                          />
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <div className={`mt-6 p-4 border rounded-lg ${
-            isHighRisk
-              ? 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
-              : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'
-          }`}>
-            <p className={`text-sm ${
-              isHighRisk
-                ? 'text-yellow-800 dark:text-yellow-300'
-                : 'text-blue-800 dark:text-blue-300'
-            }`}>
-              <strong>Clinical Note:</strong> {clinicalNote}
-            </p>
-          </div>
+        <Button variant="ghost" size="icon">
+          <MoreHorizontal size={14} />
+        </Button>
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div>
+          <div className="text-xs text-muted-foreground">Site</div>
+          <div className="font-medium capitalize">{lesionSite || "—"}</div>
+        </div>
+        <div>
+          <div className="text-xs text-muted-foreground">Status</div>
+          <span
+            className="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium mt-0.5"
+            style={{
+              background: meta.bg,
+              color: meta.color,
+              border: `1px solid ${meta.color}33`,
+            }}
+          >
+            {meta.label}
+          </span>
         </div>
       </div>
+    </div>
+  );
+}
 
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 border border-gray-200 dark:border-gray-700">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
-          <div className="flex items-center space-x-6">
-            <div className="flex items-center space-x-2">
-              <Clock className="h-5 w-5 text-gray-600 dark:text-gray-400" />
-              <div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Patient</p>
-                <p className="text-gray-900 dark:text-white">{caseData.patientId}</p>
-              </div>
-            </div>
-            <div className="border-l border-gray-300 dark:border-gray-600 pl-6">
-              <p className="text-xs text-gray-600 dark:text-gray-400">Risk Level</p>
-              <p className={isHighRisk ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}>
-                {caseData.riskLevel}
-              </p>
-            </div>
-            <div className="border-l border-gray-300 dark:border-gray-600 pl-6">
-              <p className="text-xs text-gray-600 dark:text-gray-400">Timestamp</p>
-              <p className="text-gray-900 dark:text-white">{new Date().toLocaleString()}</p>
-            </div>
-          </div>
-
-          <div className="flex space-x-4">
-            <button
-              onClick={() => router.push('/records')}
-              className="flex items-center space-x-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg transition-colors shadow-md"
-            >
-              <Save className="h-5 w-5" />
-              <span>View Patient Record</span>
-            </button>
-            <button
-              onClick={() => router.push('/report')}
-              className="flex items-center space-x-2 px-6 py-3 bg-teal-600 hover:bg-teal-700 dark:bg-teal-500 dark:hover:bg-teal-600 text-white rounded-lg transition-colors shadow-md"
-            >
-              <FileDown className="h-5 w-5" />
-              <span>Export Report</span>
-            </button>
-          </div>
+function NextStepsCard({ steps }: { steps: string[] }) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <div
+          className="p-1.5 rounded"
+          style={{
+            background: "hsl(var(--brand) / 0.1)",
+            color: "hsl(var(--brand))",
+          }}
+        >
+          <FileText size={14} />
         </div>
+        <h3 className="font-semibold">Suggested next steps</h3>
+      </div>
+      <ol className="flex flex-col gap-2.5">
+        {steps.map((s, i) => (
+          <li key={i} className="flex gap-3 text-sm">
+            <span
+              className="mono text-xs rounded-full flex-shrink-0 flex items-center justify-center font-medium"
+              style={{
+                width: 20,
+                height: 20,
+                background: "hsl(var(--brand) / 0.12)",
+                color: "hsl(var(--brand))",
+                marginTop: 1,
+              }}
+            >
+              {i + 1}
+            </span>
+            <span className="leading-relaxed">{s}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="mt-4 pt-4 border-t border-border flex items-center gap-2 flex-wrap">
+        {/* MOCK: referral letter + send to patient actions */}
+        <Button variant="outline" size="sm">
+          <FileText size={12} /> Referral letter
+        </Button>
+        <Button variant="outline" size="sm">
+          <Mail size={12} /> Send to patient
+        </Button>
       </div>
     </div>
   );
