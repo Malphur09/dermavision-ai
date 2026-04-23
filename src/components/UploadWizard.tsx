@@ -78,36 +78,54 @@ export function UploadWizard() {
     resolution: "384 × 384",
     notes: "Improved recall on MEL and SCC via focal loss tuning.",
   });
+  const [benchResult, setBenchResult] = useState<{
+    accuracy: number;
+    f1: number;
+    latency_ms: number;
+  } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // MOCK: step 1 validate simulation
     if (step === 1) {
       setValidating(true);
-      const t = setTimeout(() => setValidating(false), 1400);
-      return () => clearTimeout(t);
+      void fetch("/api/model/upload/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file?.name ?? "" }),
+      })
+        .then((r) => r.json())
+        .catch(() => null)
+        .finally(() => setValidating(false));
+      return;
     }
-    // MOCK: step 2 benchmark simulation
     if (step === 2) {
       setBenchProgress(0);
+      setBenchResult(null);
       const t = setInterval(() => {
         setBenchProgress((p) => {
           const n = p + 4 + Math.random() * 5;
-          if (n >= 100) {
+          if (n >= 96) {
             clearInterval(t);
-            return 100;
+            return 96;
           }
           return n;
         });
-      }, 160);
+      }, 120);
+      void fetch("/api/model/upload/benchmark", { method: "POST" })
+        .then((r) => r.json())
+        .then((j) => {
+          setBenchResult(j);
+          setBenchProgress(100);
+        })
+        .catch(() => setBenchProgress(100));
       return () => clearInterval(t);
     }
-  }, [step]);
+  }, [step, file?.name]);
 
   const handleFilePick = (f: File | null) => {
     if (!f) return;
-    if (!/\.(onnx|pth|safetensors)$/.test(f.name)) {
-      toast.error("Use .onnx, .pth, or .safetensors");
+    if (!/\.(onnx|pt)$/i.test(f.name)) {
+      toast.error("Use .onnx or .pt");
       return;
     }
     if (f.size > 2 * 1024 * 1024 * 1024) {
@@ -242,7 +260,7 @@ export function UploadWizard() {
                     style={{ color: "hsl(var(--muted-foreground))" }}
                   />
                   <div className="mt-3 font-medium text-sm">
-                    Drop .pth / .onnx / .safetensors
+                    Drop .onnx or .pt
                   </div>
                   <div className="text-xs text-muted-foreground mt-1">
                     or click to browse · up to 2 GB
@@ -252,7 +270,7 @@ export function UploadWizard() {
               <input
                 ref={fileInput}
                 type="file"
-                accept=".onnx,.pth,.safetensors"
+                accept=".onnx,.pt"
                 className="hidden"
                 onChange={(e) => handleFilePick(e.target.files?.[0] ?? null)}
               />
@@ -377,13 +395,21 @@ export function UploadWizard() {
                   : "Complete."}
               </div>
             </div>
-            {benchProgress >= 100 && (
+            {benchProgress >= 100 && benchResult && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
-                  { l: "Acc", v: "92.1%", d: "+0.8pp" },
-                  { l: "Macro F1", v: "0.906", d: "+0.012" },
-                  { l: "AUC", v: "0.971", d: "+0.007" },
-                  { l: "p50 lat", v: "338ms", d: "−4ms" },
+                  {
+                    l: "Acc",
+                    v: `${(benchResult.accuracy * 100).toFixed(1)}%`,
+                    d: "held-out",
+                  },
+                  { l: "Macro F1", v: benchResult.f1.toFixed(3), d: "held-out" },
+                  { l: "AUC", v: "0.971", d: "stub" },
+                  {
+                    l: "p50 lat",
+                    v: `${benchResult.latency_ms}ms`,
+                    d: "held-out",
+                  },
                 ].map((s) => (
                   <div
                     key={s.l}
@@ -486,10 +512,28 @@ export function UploadWizard() {
         ) : (
           <Button
             variant="brand"
-            onClick={() => {
-              // MOCK: deploy submit
-              toast.success(`Queued for ${deployChoice}`);
-              router.push("/admin/models");
+            onClick={async () => {
+              const toastId = toast.loading(`Deploying to ${deployChoice}…`);
+              try {
+                const res = await fetch("/api/model/deploy", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    version: meta.version,
+                    target: deployChoice,
+                  }),
+                });
+                toast.dismiss(toastId);
+                if (!res.ok) {
+                  toast.error("Deploy failed");
+                  return;
+                }
+                toast.success(`${meta.version} queued for ${deployChoice}`);
+                router.push("/admin/models");
+              } catch {
+                toast.dismiss(toastId);
+                toast.error("Deploy request failed");
+              }
             }}
           >
             <Rocket size={14} /> Deploy

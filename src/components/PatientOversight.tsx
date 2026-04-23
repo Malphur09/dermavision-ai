@@ -49,6 +49,7 @@ interface Kpis {
   totalPatients: number;
   scansProcessed: number;
   urgentFlagged: number;
+  phiAccess24h: number;
 }
 
 export function PatientOversight() {
@@ -60,21 +61,33 @@ export function PatientOversight() {
   useEffect(() => {
     const load = async () => {
       const supabase = createClient();
-      const [patientsRes, casesRes, detailsRes, totalPatientsRes, totalScansRes, urgentRes] =
-        await Promise.all([
-          supabase.from("patients").select("id, patient_id, name"),
-          supabase
-            .from("cases")
-            .select("patient_id, doctor_id, predicted_class, risk_level, created_at")
-            .order("created_at", { ascending: false }),
-          supabase.from("user_details").select("id, full_name"),
-          supabase.from("patients").select("*", { count: "exact", head: true }),
-          supabase.from("cases").select("*", { count: "exact", head: true }),
-          supabase
-            .from("cases")
-            .select("*", { count: "exact", head: true })
-            .eq("risk_level", "High Risk"),
-        ]);
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const [
+        patientsRes,
+        casesRes,
+        detailsRes,
+        totalPatientsRes,
+        totalScansRes,
+        urgentRes,
+        phiRes,
+      ] = await Promise.all([
+        supabase.from("patients").select("id, patient_id, name"),
+        supabase
+          .from("cases")
+          .select("patient_id, doctor_id, predicted_class, risk_level, created_at")
+          .order("created_at", { ascending: false }),
+        supabase.from("user_details").select("id, full_name"),
+        supabase.from("patients").select("*", { count: "exact", head: true }),
+        supabase.from("cases").select("*", { count: "exact", head: true }),
+        supabase
+          .from("cases")
+          .select("*", { count: "exact", head: true })
+          .eq("risk_level", "High Risk"),
+        supabase
+          .from("audit_logs")
+          .select("*", { count: "exact", head: true })
+          .gte("created_at", since),
+      ]);
 
       if (patientsRes.error || casesRes.error || detailsRes.error) {
         toast.error("Failed to load oversight data");
@@ -135,6 +148,7 @@ export function PatientOversight() {
         totalPatients: totalPatientsRes.count ?? 0,
         scansProcessed: totalScansRes.count ?? 0,
         urgentFlagged: urgentRes.count ?? 0,
+        phiAccess24h: phiRes.count ?? 0,
       });
       setLoading(false);
     };
@@ -168,7 +182,11 @@ export function PatientOversight() {
       d: "risk_level = High Risk",
       warn: (kpis?.urgentFlagged ?? 0) > 0,
     },
-    { l: "PHI access events", v: "—", d: "Audit log pending", mock: true },
+    {
+      l: "PHI access events",
+      v: kpis ? kpis.phiAccess24h.toLocaleString() : "—",
+      d: "Rolling 24h · audit_logs",
+    },
   ];
 
   return (
@@ -190,11 +208,6 @@ export function PatientOversight() {
             key={k.l}
             className="rounded-lg border border-border bg-card p-5 relative"
           >
-            {k.mock && (
-              <span className="absolute top-3 right-3 text-[10px] uppercase tracking-wide mono rounded px-1.5 py-0.5 border border-border text-muted-foreground">
-                mock
-              </span>
-            )}
             <div className="text-xs text-muted-foreground uppercase tracking-wide mono mb-2">
               {k.l}
             </div>

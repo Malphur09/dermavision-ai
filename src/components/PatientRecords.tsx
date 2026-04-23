@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   ChevronLeft,
@@ -11,6 +12,7 @@ import {
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
+import { logPhiAccess } from "@/lib/audit";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";
@@ -59,6 +61,7 @@ const RISK_BADGE: Record<
 };
 
 export function PatientRecords() {
+  const router = useRouter();
   const [records, setRecords] = useState<PatientRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -68,13 +71,7 @@ export function PatientRecords() {
   useEffect(() => {
     const load = async () => {
       const supabase = createClient();
-      const { data, error } = await supabase
-        .from("cases")
-        .select(
-          "id, predicted_class, confidence, risk_level, created_at, patients(id, patient_id, name, age, sex)"
-        )
-        .order("created_at", { ascending: false })
-        .limit(1000);
+      const { data, error } = await supabase.rpc("get_patient_records");
 
       if (error) {
         toast.error("Failed to load patient records");
@@ -82,40 +79,39 @@ export function PatientRecords() {
         return;
       }
 
-      const map = new Map<string, PatientRecord>();
-      for (const c of data ?? []) {
-        const patient = c.patients as unknown as {
-          id: string;
-          patient_id: string;
-          name: string;
-          age: number | null;
-          sex: string | null;
-        } | null;
-        if (!patient) continue;
-        const existing = map.get(patient.id);
-        if (existing) {
-          existing.scans += 1;
-          continue;
-        }
-        map.set(patient.id, {
-          patientDbId: patient.id,
-          patientId: patient.patient_id,
-          name: patient.name,
-          age: patient.age,
-          sex: patient.sex,
-          lastDiagnosis: c.created_at
-            ? new Date(c.created_at).toLocaleDateString("en-CA")
+      const rows = (data ?? []) as Array<{
+        patient_db_id: string;
+        patient_id: string;
+        name: string;
+        age: number | null;
+        sex: string | null;
+        latest_case_id: string | null;
+        latest_predicted_class: string | null;
+        latest_confidence: number | null;
+        latest_risk_level: string | null;
+        latest_created_at: string | null;
+        scans_count: number;
+      }>;
+
+      setRecords(
+        rows.map((r) => ({
+          patientDbId: r.patient_db_id,
+          patientId: r.patient_id,
+          name: r.name,
+          age: r.age,
+          sex: r.sex,
+          lastDiagnosis: r.latest_created_at
+            ? new Date(r.latest_created_at).toLocaleDateString("en-CA")
             : null,
-          prediction: c.predicted_class,
-          confidence: c.confidence != null ? Number(c.confidence) : null,
+          prediction: r.latest_predicted_class,
+          confidence: r.latest_confidence != null ? Number(r.latest_confidence) : null,
           risk:
-            (c.risk_level as "High Risk" | "Moderate Risk" | "Benign" | null) ??
+            (r.latest_risk_level as "High Risk" | "Moderate Risk" | "Benign" | null) ??
             null,
-          scans: 1,
-          caseId: c.id,
-        });
-      }
-      setRecords(Array.from(map.values()));
+          scans: Number(r.scans_count) || 0,
+          caseId: r.latest_case_id,
+        }))
+      );
       setLoading(false);
     };
     load();
@@ -152,7 +148,10 @@ export function PatientRecords() {
             <Button variant="outline">
               <Download size={14} /> Export
             </Button>
-            <Button variant="brand">
+            <Button
+              variant="brand"
+              onClick={() => router.push("/diagnostic?new=1")}
+            >
               <Plus size={14} /> New patient
             </Button>
           </>
@@ -246,7 +245,19 @@ export function PatientRecords() {
                     <tr
                       key={r.patientDbId}
                       className="border-b border-border hover:bg-muted/40 transition cursor-pointer"
-                      onClick={() => toast.info(`Opening ${r.patientId}…`)}
+                      onClick={() => {
+                        if (!r.caseId) {
+                          toast.info(`No case for ${r.patientId}`);
+                          return;
+                        }
+                        void logPhiAccess({
+                          resource_type: "patient",
+                          resource_id: r.patientDbId,
+                          action: "viewed",
+                          metadata: { caseId: r.caseId },
+                        });
+                        router.push(`/results?caseId=${r.caseId}`);
+                      }}
                     >
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-3">

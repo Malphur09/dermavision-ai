@@ -13,8 +13,12 @@ export default function Home() {
       router.replace("/login");
       return;
     }
-    router.replace(role === "admin" ? "/dashboard" : "/doctor-dashboard");
+    if (role) router.replace(role === "admin" ? "/dashboard" : "/doctor-dashboard");
   }, [loading, user, role, router]);
 
-  return null;
+  return (
+    <div className="flex items-center justify-center min-h-screen text-sm text-muted-foreground">
+      Loading…
+    </div>
+  );
 }

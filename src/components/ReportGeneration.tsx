@@ -11,6 +11,7 @@ import {
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
+import { logPhiAccess } from "@/lib/audit";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Alert } from "@/components/primitives/Alert";
@@ -123,8 +124,17 @@ export function ReportGeneration() {
       format,
     });
     toast.dismiss(toastId);
-    if (error) toast.error("Failed to save report");
-    else toast.success(`Report saved as ${format.toUpperCase()}`);
+    if (error) {
+      toast.error("Failed to save report");
+    } else {
+      toast.success(`Report saved as ${format.toUpperCase()}`);
+      void logPhiAccess({
+        resource_type: "case",
+        resource_id: caseData.caseId,
+        action: "exported",
+        metadata: { format, sections },
+      });
+    }
     setIsGenerating(false);
   };
 

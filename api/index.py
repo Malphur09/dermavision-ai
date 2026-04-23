@@ -20,6 +20,13 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000"])
 
+from api.admin import admin_bp  # noqa: E402
+from api.metrics import metrics_bp  # noqa: E402
+from api.auth import auth_bp  # noqa: E402
+app.register_blueprint(admin_bp)
+app.register_blueprint(metrics_bp)
+app.register_blueprint(auth_bp)
+
 CLASSES = [
     "Melanoma",
     "Melanocytic Nevus",
