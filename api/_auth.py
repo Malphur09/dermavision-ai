@@ -75,6 +75,29 @@ def require_admin(f):
     return wrapper
 
 
+def require_user(f):
+    """Gate for authenticated user self-service endpoints (non-admin).
+
+    Verifies caller JWT via Supabase, then injects `user` + `token` into the
+    Flask request context as `request.environ['caller']`.
+    """
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+            return jsonify({"error": "Auth API not configured"}), 503
+        token = _bearer_token()
+        if not token:
+            return jsonify({"error": "Missing bearer token"}), 401
+        user = _verify_user(token)
+        if not user:
+            return jsonify({"error": "Invalid token"}), 401
+        request.environ["caller"] = {"user": user, "token": token}
+        return f(*args, **kwargs)
+
+    return wrapper
+
+
 def service_headers() -> dict:
     return {
         "apikey": SUPABASE_SERVICE_ROLE_KEY or "",

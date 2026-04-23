@@ -161,25 +161,36 @@ export function Settings() {
       setChangingPw(false);
       return;
     }
-    const updatePromise = supabase.auth.updateUser({ password: newPassword });
-    const timeoutPromise = new Promise<{ error: Error }>((resolve) =>
-      setTimeout(
-        () => resolve({ error: new Error("Password change timed out") }),
-        20_000
-      )
-    );
-    const result = (await Promise.race([updatePromise, timeoutPromise])) as {
-      error: { message?: string } | null;
-    };
-    if (result.error) {
-      console.error("[settings] password change failed", result.error);
-      toast.error(result.error.message ?? "Password change failed");
-    } else {
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 15_000);
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${sessionData.session.access_token}`,
+        },
+        body: JSON.stringify({ password: newPassword }),
+        signal: controller.signal,
+      });
+      clearTimeout(t);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        toast.error(body.error ?? "Password change failed");
+        return;
+      }
       toast.success("Password changed");
       setNewPassword("");
       setConfirmPassword("");
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      console.error("[settings] password change failed", err);
+      toast.error(aborted ? "Password change timed out" : "Password change failed");
+    } finally {
+      setChangingPw(false);
     }
-    setChangingPw(false);
   };
 
   const saveNotifications = async () => {

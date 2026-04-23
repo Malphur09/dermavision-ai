@@ -44,19 +44,8 @@ export default function AuthedLayout({ children }: { children: ReactNode }) {
   const { user, role, loading } = useAuth();
 
   useEffect(() => {
-    if (loading) return;
-    if (!user) {
-      router.replace("/login");
-      return;
-    }
-    if (!role) {
-      // Logged-in but role unresolved (profile row missing or RLS). Force re-login
-      // instead of rendering null forever (white page).
-      void createClient()
-        .auth.signOut()
-        .then(() => router.replace("/login"));
-    }
-  }, [loading, user, role, router]);
+    if (!loading && !user) router.replace("/login");
+  }, [loading, user, router]);
 
   if (loading) {
     return (
@@ -65,7 +54,25 @@ export default function AuthedLayout({ children }: { children: ReactNode }) {
       </div>
     );
   }
-  if (!user || !role) return null;
+  if (!user) return null;
+  if (!role) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen gap-3 text-sm">
+        <p className="text-muted-foreground">
+          Your account profile could not be loaded.
+        </p>
+        <button
+          className="text-brand font-medium"
+          onClick={async () => {
+            await createClient().auth.signOut();
+            router.replace("/login");
+          }}
+        >
+          Sign out and try again
+        </button>
+      </div>
+    );
+  }
 
   const nav = role === "admin" ? adminNav : doctorNav;
 
