@@ -17,6 +17,7 @@ out/
 build/
 .env.local
 .env.*.local
+*.tsbuildinfo
 
 # Dataset & model weights
 data/
