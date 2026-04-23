@@ -37,6 +37,8 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
   );
   const [loading, setLoading] = useState(false);
   const [confirmationSent, setConfirmationSent] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
+  const [resetSending, setResetSending] = useState(false);
 
   const validate = () => {
     const next: typeof errors = {};
@@ -48,6 +50,25 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       next.password = "Password must be at least 6 characters";
     setErrors(next);
     return Object.keys(next).length === 0;
+  };
+
+  const handleReset = async () => {
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setErrors({ email: "Enter a valid email address" });
+      return;
+    }
+    setResetSending(true);
+    const supabase = createClient();
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    setResetSending(false);
+    if (error) {
+      toast.error(error.message || "Failed to send reset email");
+      return;
+    }
+    toast.success(`Reset link sent to ${email}`);
+    setResetMode(false);
   };
 
   const clearErr = (field: "email" | "password") => {
@@ -111,6 +132,66 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       setLoading(false);
     }
   };
+
+  if (resetMode) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-muted/40">
+        <div className="w-full max-w-md rounded-lg border border-border bg-card p-8 shadow-card-md">
+          <div className="mb-6">
+            <LogoWord size={28} />
+          </div>
+          <h2 className="text-xl font-semibold tracking-tight mb-1">
+            Reset password
+          </h2>
+          <p className="text-sm text-muted-foreground mb-6">
+            Enter your account email. We&apos;ll send a secure reset link.
+          </p>
+          <Label htmlFor="reset-email" className="mb-1.5 block">
+            Email
+          </Label>
+          <div className="relative">
+            <Mail
+              size={14}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              id="reset-email"
+              type="email"
+              className="pl-9"
+              placeholder="you@clinic.com"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                clearErr("email");
+              }}
+              aria-invalid={!!errors.email?.trim()}
+            />
+          </div>
+          {errors.email?.trim() && (
+            <p className="mt-1.5 text-xs text-destructive">{errors.email}</p>
+          )}
+          <div className="flex gap-2 mt-6">
+            <Button
+              variant="brand"
+              className="flex-1 h-10"
+              disabled={resetSending}
+              onClick={handleReset}
+            >
+              {resetSending ? "Sending…" : "Send reset link"}
+            </Button>
+            <Button
+              variant="ghost"
+              className="h-10"
+              onClick={() => setResetMode(false)}
+              disabled={resetSending}
+            >
+              Back
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (confirmationSent) {
     return (
@@ -214,7 +295,13 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
           <div className="flex items-center justify-between mb-1.5">
             <Label htmlFor="pw">Password</Label>
             {mode === "login" && (
-              <a className="text-xs text-brand cursor-pointer">Forgot?</a>
+              <button
+                type="button"
+                className="text-xs text-brand cursor-pointer"
+                onClick={() => setResetMode(true)}
+              >
+                Forgot?
+              </button>
             )}
           </div>
           <div className="relative">
