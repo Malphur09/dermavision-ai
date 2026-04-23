@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   CheckCircle,
   Clock,
@@ -70,10 +71,12 @@ interface DiagnosticInputProps {
 
 export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
   const { user } = useAuth();
+  const searchParams = useSearchParams();
+  const startInNewPatient = searchParams?.get("new") === "1";
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedPatientDbId, setSelectedPatientDbId] = useState<string>("");
-  const [isNewPatient, setIsNewPatient] = useState(false);
+  const [isNewPatient, setIsNewPatient] = useState(startInNewPatient);
 
   const [newPatientId, setNewPatientId] = useState("");
   const [newPatientName, setNewPatientName] = useState("");
@@ -276,26 +279,42 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
       predicted_class: string;
       probabilities: Record<string, number>;
     };
+    const predictController = new AbortController();
+    const predictTimeout = setTimeout(() => predictController.abort(), 60_000);
     try {
       const res = await fetch("/api/predict", {
         method: "POST",
         body: formData,
+        signal: predictController.signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       prediction = await res.json();
-    } catch {
-      toast.error("Prediction API failed");
+    } catch (err) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      toast.error(aborted ? "Prediction timed out" : "Prediction API failed");
       setIsProcessing(false);
       return;
+    } finally {
+      clearTimeout(predictTimeout);
     }
 
     const ext = uploadedFile.name.split(".").pop() ?? "jpg";
     const storagePath = `${user!.id}/${Date.now()}.${ext}`;
-    const { error: uploadError } = await supabase.storage
+    const uploadPromise = supabase.storage
       .from(IMAGES_BUCKET)
       .upload(storagePath, uploadedFile);
-    if (uploadError) {
-      toast.error("Image upload failed");
+    const uploadTimeout = new Promise<{ error: Error }>((resolve) =>
+      setTimeout(
+        () => resolve({ error: new Error("Image upload timed out") }),
+        30_000
+      )
+    );
+    const uploadResult = (await Promise.race([
+      uploadPromise,
+      uploadTimeout,
+    ])) as { error: { message?: string } | null };
+    if (uploadResult.error) {
+      toast.error(uploadResult.error.message ?? "Image upload failed");
       setIsProcessing(false);
       return;
     }

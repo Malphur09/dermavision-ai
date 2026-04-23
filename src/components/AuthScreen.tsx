@@ -141,7 +141,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
     );
   }
 
-  const FormCard = () => (
+  const formCard = (
     <div className="w-full">
       <div className="mb-6">
         <LogoWord size={28} />
@@ -311,6 +311,9 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       </div>
     </div>
   );
+  // Note: `formCard` is a JSX expression, not a component. Defining it as a
+  // component (function) would create a new reference each render, causing
+  // React to unmount/remount the inputs and lose focus on every keystroke.
 
   return (
     <div className="min-h-screen flex">
@@ -438,9 +441,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
         className="flex items-center justify-center p-6 bg-background flex-1"
         style={{ minWidth: 380 }}
       >
-        <div className="w-full max-w-md">
-          <FormCard />
-        </div>
+        <div className="w-full max-w-md">{formCard}</div>
       </div>
     </div>
   );

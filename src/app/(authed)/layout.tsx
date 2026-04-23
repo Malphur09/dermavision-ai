@@ -18,6 +18,7 @@ import {
 
 import { AppShell, type NavItem } from "@/components/AppShell";
 import { useAuth } from "@/contexts/AuthContext";
+import { createClient } from "@/lib/supabase/client";
 
 const doctorNav: NavItem[] = [
   { path: "/doctor-dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -43,10 +44,28 @@ export default function AuthedLayout({ children }: { children: ReactNode }) {
   const { user, role, loading } = useAuth();
 
   useEffect(() => {
-    if (!loading && !user) router.replace("/login");
-  }, [loading, user, router]);
+    if (loading) return;
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+    if (!role) {
+      // Logged-in but role unresolved (profile row missing or RLS). Force re-login
+      // instead of rendering null forever (white page).
+      void createClient()
+        .auth.signOut()
+        .then(() => router.replace("/login"));
+    }
+  }, [loading, user, role, router]);
 
-  if (loading || !user || !role) return null;
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen text-sm text-muted-foreground">
+        Loading…
+      </div>
+    );
+  }
+  if (!user || !role) return null;
 
   const nav = role === "admin" ? adminNav : doctorNav;
 

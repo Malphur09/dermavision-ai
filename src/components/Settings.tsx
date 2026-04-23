@@ -154,11 +154,27 @@ export function Settings() {
 
     setChangingPw(true);
     const supabase = createClient();
-    const { error } = await supabase.auth.updateUser({
-      password: newPassword,
-    });
-    if (error) toast.error("Password change failed");
-    else {
+    const { data: sessionData, error: sessionErr } =
+      await supabase.auth.getSession();
+    if (sessionErr || !sessionData.session) {
+      toast.error("Session expired. Please sign in again.");
+      setChangingPw(false);
+      return;
+    }
+    const updatePromise = supabase.auth.updateUser({ password: newPassword });
+    const timeoutPromise = new Promise<{ error: Error }>((resolve) =>
+      setTimeout(
+        () => resolve({ error: new Error("Password change timed out") }),
+        20_000
+      )
+    );
+    const result = (await Promise.race([updatePromise, timeoutPromise])) as {
+      error: { message?: string } | null;
+    };
+    if (result.error) {
+      console.error("[settings] password change failed", result.error);
+      toast.error(result.error.message ?? "Password change failed");
+    } else {
       toast.success("Password changed");
       setNewPassword("");
       setConfirmPassword("");

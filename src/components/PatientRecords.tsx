@@ -148,7 +148,10 @@ export function PatientRecords() {
             <Button variant="outline">
               <Download size={14} /> Export
             </Button>
-            <Button variant="brand">
+            <Button
+              variant="brand"
+              onClick={() => router.push("/diagnostic?new=1")}
+            >
               <Plus size={14} /> New patient
             </Button>
           </>
