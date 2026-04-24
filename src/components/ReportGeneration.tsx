@@ -74,6 +74,11 @@ export function ReportGeneration() {
   });
   const [format, setFormat] = useState<"pdf" | "json">("pdf");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [lastExport, setLastExport] = useState<{
+    url: string;
+    format: string;
+    at: number;
+  } | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -171,8 +176,29 @@ export function ReportGeneration() {
         return;
       }
       const data: { signed_url: string; format: string } = await resp.json();
-      toast.success(`Report ready — ${data.format.toUpperCase()}`);
-      window.open(data.signed_url, "_blank", "noopener,noreferrer");
+      setLastExport({ url: data.signed_url, format: data.format, at: Date.now() });
+      // Anchor-click bypasses most pop-up blockers (user-gesture context is
+      // already broken by the await, but a real anchor navigation is still
+      // allowed by most browsers where window.open would be blocked).
+      const a = document.createElement("a");
+      a.href = data.signed_url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast.success(`Report ready — ${data.format.toUpperCase()}`, {
+        action: {
+          label: "Open",
+          onClick: () => {
+            const link = document.createElement("a");
+            link.href = data.signed_url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.click();
+          },
+        },
+      });
       void logPhiAccess({
         resource_type: "case",
         resource_id: caseData.caseId,
@@ -391,8 +417,32 @@ export function ReportGeneration() {
                   : `Generate ${format.toUpperCase()}`}
               </Button>
             </div>
+            {lastExport && (
+              <div className="mt-4 rounded-md border border-border bg-muted/30 p-3 flex items-center gap-3">
+                <FileText size={14} className="text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium">
+                    Last export · {lastExport.format.toUpperCase()}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Generated {new Date(lastExport.at).toLocaleTimeString()} ·
+                    link expires in ~1 hour
+                  </div>
+                </div>
+                <a
+                  href={lastExport.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-medium text-brand underline whitespace-nowrap"
+                >
+                  Open file
+                </a>
+              </div>
+            )}
             <p className="text-[11px] text-muted-foreground mt-3">
-              File opens in a new tab. Download link expires after 1 hour.
+              File opens in a new tab. If your browser blocks it, use the{" "}
+              <strong>Open file</strong> link above. Download link expires after
+              1 hour.
             </p>
           </div>
         </div>
