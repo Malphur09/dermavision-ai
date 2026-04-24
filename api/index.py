@@ -2,6 +2,7 @@ import io
 import os
 import base64
 import threading
+import time
 
 import numpy as np
 from PIL import Image
@@ -21,7 +22,7 @@ app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000"])
 
 from api.admin import admin_bp  # noqa: E402
-from api.metrics import metrics_bp  # noqa: E402
+from api.metrics import metrics_bp, insert_telemetry  # noqa: E402
 from api.auth import auth_bp  # noqa: E402
 from api.reports import reports_bp  # noqa: E402
 app.register_blueprint(admin_bp)
@@ -105,14 +106,23 @@ def predict():
     image_bytes = file.read()
     tensor, _ = preprocess_image(image_bytes)
 
+    t0 = time.perf_counter()
     with torch.no_grad():
         logits = torch_model(tensor)[0].numpy()
+    latency_ms = int((time.perf_counter() - t0) * 1000)
 
     exp_logits = np.exp(logits - logits.max())
     probs = exp_logits / exp_logits.sum()
 
     probabilities = {cls: round(float(p), 4) for cls, p in zip(CLASSES, probs)}
     predicted_class = max(probabilities, key=probabilities.get)
+
+    case_id = request.form.get("case_id") or None
+    threading.Thread(
+        target=insert_telemetry,
+        args=(case_id, latency_ms),
+        daemon=True,
+    ).start()
 
     return jsonify({
         "predicted_class": predicted_class,
