@@ -51,6 +51,7 @@ interface UserRow {
   full_name: string | null;
   scans_count: number;
   suspended: boolean;
+  approved_at: string | null;
 }
 
 type Status = "active" | "pending" | "suspended";
@@ -77,9 +78,10 @@ const STATUS_STYLE: Record<Status, { bg: string; color: string }> = {
 
 function computeStatus(u: UserRow): Status {
   if (u.suspended) {
-    // Self-signups land suspended until an admin approves. Users who have
-    // never signed in are pending approval, not actively suspended.
-    return u.last_sign_in_at ? "suspended" : "pending";
+    // Never-approved accounts are pending admin review. Previously-approved
+    // accounts that are now suspended are actively suspended — approved_at
+    // is stamped the first time an admin un-suspends a user.
+    return u.approved_at ? "suspended" : "pending";
   }
   return "active";
 }
@@ -181,7 +183,7 @@ export function AdminManagement() {
     toast.success(
       v
         ? `${target.email} suspended`
-        : target.last_sign_in_at
+        : target.approved_at
           ? `${target.email} restored`
           : `${target.email} approved`
     );
@@ -419,7 +421,7 @@ export function AdminManagement() {
                                 }
                               >
                                 <UserCheck size={14} />{" "}
-                                {u.last_sign_in_at
+                                {u.approved_at
                                   ? "Restore access"
                                   : "Approve access"}
                               </DropdownMenuItem>
@@ -467,21 +469,21 @@ export function AdminManagement() {
               title={
                 dialog.to
                   ? "Suspend user?"
-                  : dialog.user.last_sign_in_at
+                  : dialog.user.approved_at
                     ? "Restore access?"
                     : "Approve access?"
               }
               description={
                 dialog.to
                   ? `${dialog.user.email} will be signed out and blocked from signing in.`
-                  : dialog.user.last_sign_in_at
+                  : dialog.user.approved_at
                     ? `${dialog.user.email} will regain access on next sign-in.`
                     : `${dialog.user.email} has been waiting for approval. They will be able to sign in after you approve.`
               }
               confirmLabel={
                 dialog.to
                   ? "Suspend"
-                  : dialog.user.last_sign_in_at
+                  : dialog.user.approved_at
                     ? "Restore"
                     : "Approve"
               }
