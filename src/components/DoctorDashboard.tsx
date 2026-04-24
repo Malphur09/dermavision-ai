@@ -12,7 +12,7 @@ import {
 
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
-import { ISIC_CLASSES, type RiskBucket } from "@/lib/mock-data";
+import { ISIC_CLASSES, type RiskBucket } from "@/lib/isic-classes";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";

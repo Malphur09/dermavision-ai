@@ -31,6 +31,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -61,6 +67,18 @@ export function AppShell({
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const searchWrapRef = useRef<HTMLDivElement>(null);
+
+  type ModelVersion = {
+    version: string;
+    status: string;
+    architecture?: string | null;
+    params?: string | null;
+    notes?: string | null;
+    date?: string | null;
+  };
+  const [modelOpen, setModelOpen] = useState(false);
+  const [activeModel, setActiveModel] = useState<ModelVersion | null>(null);
+  const [modelLoading, setModelLoading] = useState(false);
 
   const patientTarget = role === "admin" ? "/admin/patients" : "/records";
 
@@ -182,10 +200,33 @@ export function AppShell({
               </span>
             </div>
             <div className="text-xs text-muted-foreground leading-relaxed mb-2">
-              {/* MOCK: model card copy */}
-              v1.0 · ISIC-2019 validation.
+              {activeModel
+                ? `${activeModel.version} · ${activeModel.architecture ?? "ISIC-2019"}`
+                : "v1.0 · ISIC-2019 validation."}
             </div>
-            <Button variant="outline" size="sm" className="w-full h-7 text-[11px]">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full h-7 text-[11px]"
+              onClick={async () => {
+                setModelOpen(true);
+                if (!activeModel && !modelLoading) {
+                  setModelLoading(true);
+                  try {
+                    const res = await fetch("/api/model/versions");
+                    const json = await res.json();
+                    const prod = (json.versions ?? []).find(
+                      (v: ModelVersion) => v.status === "production"
+                    );
+                    setActiveModel(prod ?? (json.versions ?? [])[0] ?? null);
+                  } catch {
+                    // swallow — dialog still opens with fallback copy
+                  } finally {
+                    setModelLoading(false);
+                  }
+                }
+              }}
+            >
               View model card
             </Button>
           </div>
@@ -406,6 +447,43 @@ export function AppShell({
 
         <div className="flex-1 overflow-auto">{children}</div>
       </main>
+
+      <Dialog open={modelOpen} onOpenChange={setModelOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Active model</DialogTitle>
+          </DialogHeader>
+          {modelLoading && (
+            <div className="text-sm text-muted-foreground">Loading…</div>
+          )}
+          {!modelLoading && activeModel && (
+            <dl className="text-sm divide-y divide-border">
+              {[
+                ["Version", activeModel.version],
+                ["Status", activeModel.status],
+                ["Architecture", activeModel.architecture ?? "—"],
+                ["Params", activeModel.params ?? "—"],
+                ["Deployed", activeModel.date ?? "—"],
+              ].map(([k, v]) => (
+                <div key={k} className="flex justify-between py-2">
+                  <dt className="text-muted-foreground">{k}</dt>
+                  <dd className="mono">{v}</dd>
+                </div>
+              ))}
+              {activeModel.notes && (
+                <div className="pt-3 text-xs text-muted-foreground">
+                  {activeModel.notes}
+                </div>
+              )}
+            </dl>
+          )}
+          {!modelLoading && !activeModel && (
+            <div className="text-sm text-muted-foreground">
+              No model registered yet.
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
