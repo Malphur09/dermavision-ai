@@ -176,12 +176,20 @@ export function ReportGeneration() {
         return;
       }
       const data: { signed_url: string; format: string } = await resp.json();
-      setLastExport({ url: data.signed_url, format: data.format, at: Date.now() });
+      const filename = `dermavision-${caseData.caseId.slice(0, 8)}.${data.format}`;
+      const downloadUrl =
+        data.signed_url +
+        (data.signed_url.includes("?") ? "&" : "?") +
+        `download=${encodeURIComponent(filename)}`;
+      setLastExport({ url: downloadUrl, format: data.format, at: Date.now() });
       // Anchor-click bypasses most pop-up blockers (user-gesture context is
       // already broken by the await, but a real anchor navigation is still
       // allowed by most browsers where window.open would be blocked).
+      // The ?download=<name> query makes Supabase return Content-Disposition:
+      // attachment, so JSON (and PDF) download to disk instead of rendering
+      // inline.
       const a = document.createElement("a");
-      a.href = data.signed_url;
+      a.href = downloadUrl;
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       document.body.appendChild(a);
@@ -192,7 +200,7 @@ export function ReportGeneration() {
           label: "Open",
           onClick: () => {
             const link = document.createElement("a");
-            link.href = data.signed_url;
+            link.href = downloadUrl;
             link.target = "_blank";
             link.rel = "noopener noreferrer";
             link.click();
