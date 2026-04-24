@@ -22,6 +22,20 @@ interface CaseSession {
   riskLevel: string;
 }
 
+interface PastReport {
+  id: string;
+  case_id: string;
+  format: "pdf" | "json";
+  file_url: string | null;
+  created_at: string;
+  sections: Record<string, boolean> | null;
+  cases: {
+    patients: { patient_id: string | null; name: string | null } | null;
+  } | null;
+}
+
+const REPORTS_BUCKET = "reports";
+
 const SECTIONS = [
   {
     key: "patientInfo",
@@ -79,6 +93,59 @@ export function ReportGeneration() {
     format: string;
     at: number;
   } | null>(null);
+  const [pastReports, setPastReports] = useState<PastReport[]>([]);
+  const [loadingReports, setLoadingReports] = useState(true);
+  const [openingReportId, setOpeningReportId] = useState<string | null>(null);
+
+  const loadPastReports = async () => {
+    if (!user) return;
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("reports")
+      .select(
+        "id, case_id, format, file_url, created_at, sections, cases(patients(patient_id, name))"
+      )
+      .eq("doctor_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (error) {
+      setLoadingReports(false);
+      return;
+    }
+    setPastReports((data ?? []) as unknown as PastReport[]);
+    setLoadingReports(false);
+  };
+
+  useEffect(() => {
+    void loadPastReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  const openPastReport = async (r: PastReport) => {
+    if (!r.file_url) {
+      toast.error("Report file missing");
+      return;
+    }
+    setOpeningReportId(r.id);
+    const supabase = createClient();
+    const { data, error } = await supabase.storage
+      .from(REPORTS_BUCKET)
+      .createSignedUrl(r.file_url, 60 * 60, {
+        download: `dermavision-${r.case_id.slice(0, 8)}.${r.format}`,
+      });
+    setOpeningReportId(null);
+    if (error || !data?.signedUrl) {
+      toast.error("Failed to generate download link");
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = data.signedUrl;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
 
   useEffect(() => {
     const supabase = createClient();
@@ -213,6 +280,7 @@ export function ReportGeneration() {
         action: "exported",
         metadata: { format, sections },
       });
+      void loadPastReports();
     } catch (e) {
       toast.dismiss(toastId);
       toast.error(
@@ -452,6 +520,88 @@ export function ReportGeneration() {
               <strong>Open file</strong> link above. Download link expires after
               1 hour.
             </p>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-card">
+          <div className="p-5 border-b border-border flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">Generated reports</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Your last 20 exports. Links are regenerated on open.
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setLoadingReports(true);
+                void loadPastReports();
+              }}
+            >
+              Refresh
+            </Button>
+          </div>
+          <div>
+            {loadingReports ? (
+              <div className="p-5 text-sm text-muted-foreground">
+                Loading…
+              </div>
+            ) : pastReports.length === 0 ? (
+              <div className="p-5 text-sm text-muted-foreground">
+                No reports yet. Generate one above.
+              </div>
+            ) : (
+              <ul className="divide-y divide-border">
+                {pastReports.map((r) => {
+                  const patient = r.cases?.patients;
+                  const patientLabel =
+                    patient?.patient_id && patient?.name
+                      ? `${patient.patient_id} · ${patient.name}`
+                      : patient?.patient_id ||
+                        patient?.name ||
+                        `Case ${r.case_id.slice(0, 8)}`;
+                  return (
+                    <li
+                      key={r.id}
+                      className="flex items-center gap-3 px-5 py-3"
+                    >
+                      <div className="shrink-0 w-9 h-9 rounded-md bg-muted/60 flex items-center justify-center">
+                        {r.format === "pdf" ? (
+                          <FileText
+                            size={16}
+                            className="text-muted-foreground"
+                          />
+                        ) : (
+                          <FileJson
+                            size={16}
+                            className="text-muted-foreground"
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">
+                          {patientLabel}
+                        </div>
+                        <div className="text-xs text-muted-foreground mono">
+                          {r.format.toUpperCase()} ·{" "}
+                          {new Date(r.created_at).toLocaleString()}
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openPastReport(r)}
+                        disabled={openingReportId === r.id || !r.file_url}
+                      >
+                        <Download size={12} />
+                        {openingReportId === r.id ? "Opening…" : "Open"}
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         </div>
       </div>
