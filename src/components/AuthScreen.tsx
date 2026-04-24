@@ -34,9 +34,12 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
   const [license, setLicense] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [remember, setRemember] = useState(true);
-  const [errors, setErrors] = useState<{ email?: string; password?: string }>(
-    {}
-  );
+  const [errors, setErrors] = useState<{
+    email?: string;
+    password?: string;
+    firstName?: string;
+    lastName?: string;
+  }>({});
   const [loading, setLoading] = useState(false);
   const [confirmationSent, setConfirmationSent] = useState(false);
   const [resetMode, setResetMode] = useState(false);
@@ -48,8 +51,22 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       next.email = "Enter a valid email address";
     if (!password.trim()) next.password = "Password is required";
-    else if (password.length < 6)
+    else if (mode === "signup") {
+      if (password.length < 8)
+        next.password = "At least 8 characters";
+      else if (!/[A-Z]/.test(password))
+        next.password = "Must contain an uppercase letter";
+      else if (!/[a-z]/.test(password))
+        next.password = "Must contain a lowercase letter";
+      else if (!/\d/.test(password))
+        next.password = "Must contain a number";
+    } else if (password.length < 6) {
       next.password = "Password must be at least 6 characters";
+    }
+    if (mode === "signup") {
+      if (!firstName.trim()) next.firstName = "First name is required";
+      if (!lastName.trim()) next.lastName = "Last name is required";
+    }
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -73,7 +90,9 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
     setResetMode(false);
   };
 
-  const clearErr = (field: "email" | "password") => {
+  const clearErr = (
+    field: "email" | "password" | "firstName" | "lastName"
+  ) => {
     if (errors[field]) {
       setErrors((p) => {
         const n = { ...p };
@@ -267,8 +286,17 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
                 id="fn"
                 placeholder="Elena"
                 value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                onChange={(e) => {
+                  setFirstName(e.target.value);
+                  clearErr("firstName");
+                }}
+                aria-invalid={!!errors.firstName}
               />
+              {errors.firstName && (
+                <p className="mt-1.5 text-xs text-destructive">
+                  {errors.firstName}
+                </p>
+              )}
             </div>
             <div>
               <Label htmlFor="ln" className="mb-1.5 block">
@@ -278,8 +306,17 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
                 id="ln"
                 placeholder="Voss"
                 value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                onChange={(e) => {
+                  setLastName(e.target.value);
+                  clearErr("lastName");
+                }}
+                aria-invalid={!!errors.lastName}
               />
+              {errors.lastName && (
+                <p className="mt-1.5 text-xs text-destructive">
+                  {errors.lastName}
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -350,8 +387,14 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
-          {errors.password && (
+          {errors.password ? (
             <p className="mt-1.5 text-xs text-destructive">{errors.password}</p>
+          ) : (
+            mode === "signup" && (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                8+ chars, with uppercase, lowercase, and a number.
+              </p>
+            )
           )}
         </div>
 
