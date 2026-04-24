@@ -49,7 +49,7 @@ const DEPLOY_OPTIONS = [
   {
     k: "production",
     t: "Promote to production",
-    d: "Replace v3.2.1 immediately. All traffic routed here.",
+    d: "Replace v1.0 immediately. All traffic routed here.",
     Icon: Rocket,
     danger: true,
   },
@@ -73,7 +73,7 @@ export function UploadWizard() {
   const [benchProgress, setBenchProgress] = useState(0);
   const [deployChoice, setDeployChoice] = useState<string>("staging");
   const [meta, setMeta] = useState({
-    version: "v3.3.0-rc1",
+    version: "v1.1",
     architecture: "EfficientNetV2-L + CBAM",
     resolution: "384 × 384",
     notes: "Improved recall on MEL and SCC via focal loss tuning.",

@@ -243,7 +243,7 @@ export function DoctorDashboard() {
       delta: "",
       icon: Brain,
       warn: false,
-      mock: true,
+      mock: false,
     },
   ];
 

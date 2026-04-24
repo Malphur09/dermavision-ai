@@ -162,7 +162,7 @@ export function AdminDashboard() {
     <div className="p-8 max-w-7xl mx-auto">
       <PageHeader
         title="Model metrics"
-        subtitle="Production: v3.2.1 · Staging: v3.3.0-rc1"
+        subtitle="Production: v1.0"
         breadcrumb={["Admin", "Model metrics"]}
         actions={
           <>
@@ -220,7 +220,7 @@ export function AdminDashboard() {
             <div>
               <h3 className="font-semibold">Training curves</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                v3.3.0-rc1 · 40 epochs
+                v1.0 · 40 epochs
               </p>
             </div>
             <div className="flex items-center gap-3 text-xs">

@@ -584,9 +584,7 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
               }}
             />
             {/* MOCK: model stats copy */}
-            <span className="text-xs mono tracking-wide">
-              MODEL v3.2.1 · 91.3% ACCURACY
-            </span>
+            <span className="text-xs mono tracking-wide">MODEL v1.0</span>
           </div>
           <h2 className="text-4xl font-semibold tracking-tight mb-4 leading-tight">
             Decision support for

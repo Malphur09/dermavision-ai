@@ -183,7 +183,7 @@ export function AppShell({
             </div>
             <div className="text-xs text-muted-foreground leading-relaxed mb-2">
               {/* MOCK: model card copy */}
-              v3.2.1 · 91.3% balanced accuracy on ISIC-2019 validation.
+              v1.0 · ISIC-2019 validation.
             </div>
             <Button variant="outline" size="sm" className="w-full h-7 text-[11px]">
               View model card
