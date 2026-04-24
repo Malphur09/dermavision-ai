@@ -230,8 +230,9 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
             Check your email
           </h2>
           <p className="text-sm text-muted-foreground">
-            Confirmation link sent to <strong>{email}</strong>. Click it to
-            activate your account, then sign in.
+            Confirmation link sent to <strong>{email}</strong>. After you
+            confirm, an administrator will review your request — you&apos;ll be
+            notified once access is approved.
           </p>
           <Button
             variant="ghost"
@@ -264,9 +265,12 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
             aria-hidden
           />
           <div className="flex-1">
-            <div className="font-medium leading-tight">Account suspended</div>
+            <div className="font-medium leading-tight">
+              Access not yet active
+            </div>
             <div className="text-xs mt-1 opacity-90 leading-snug">
-              Contact an administrator to restore access.
+              If you just signed up, an administrator still needs to approve
+              your access. Otherwise, contact an administrator to restore it.
             </div>
           </div>
         </div>
@@ -276,7 +280,7 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
       </h1>
       <p className="text-sm text-muted-foreground mb-6">
         {mode === "login"
-          ? "Sign in to continue. Your role will be loaded automatically."
+          ? "Sign in to continue."
           : "Clinical access requires verification. A brief review follows sign-up."}
       </p>
 

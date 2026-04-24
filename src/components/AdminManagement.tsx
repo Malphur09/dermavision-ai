@@ -76,9 +76,12 @@ const STATUS_STYLE: Record<Status, { bg: string; color: string }> = {
 };
 
 function computeStatus(u: UserRow): Status {
-  if (u.suspended) return "suspended";
-  if (u.last_sign_in_at) return "active";
-  return "pending";
+  if (u.suspended) {
+    // Self-signups land suspended until an admin approves. Users who have
+    // never signed in are pending approval, not actively suspended.
+    return u.last_sign_in_at ? "suspended" : "pending";
+  }
+  return "active";
 }
 
 function augment(u: UserRow): AugmentedUser {
@@ -175,7 +178,13 @@ export function AdminManagement() {
       toast.error(error.message || "Failed to update suspension");
       return;
     }
-    toast.success(v ? `${target.email} suspended` : `${target.email} restored`);
+    toast.success(
+      v
+        ? `${target.email} suspended`
+        : target.last_sign_in_at
+          ? `${target.email} restored`
+          : `${target.email} approved`
+    );
     setDialog(null);
     await refresh();
   };
@@ -409,7 +418,10 @@ export function AdminManagement() {
                                   })
                                 }
                               >
-                                <UserCheck size={14} /> Restore access
+                                <UserCheck size={14} />{" "}
+                                {u.last_sign_in_at
+                                  ? "Restore access"
+                                  : "Approve access"}
                               </DropdownMenuItem>
                             ) : (
                               <DropdownMenuItem
@@ -452,13 +464,27 @@ export function AdminManagement() {
           )}
           {dialog?.kind === "suspend" && (
             <ConfirmBody
-              title={dialog.to ? "Suspend user?" : "Restore access?"}
+              title={
+                dialog.to
+                  ? "Suspend user?"
+                  : dialog.user.last_sign_in_at
+                    ? "Restore access?"
+                    : "Approve access?"
+              }
               description={
                 dialog.to
                   ? `${dialog.user.email} will be signed out and blocked from signing in.`
-                  : `${dialog.user.email} will regain access on next sign-in.`
+                  : dialog.user.last_sign_in_at
+                    ? `${dialog.user.email} will regain access on next sign-in.`
+                    : `${dialog.user.email} has been waiting for approval. They will be able to sign in after you approve.`
               }
-              confirmLabel={dialog.to ? "Suspend" : "Restore"}
+              confirmLabel={
+                dialog.to
+                  ? "Suspend"
+                  : dialog.user.last_sign_in_at
+                    ? "Restore"
+                    : "Approve"
+              }
               destructive={dialog.to}
               busy={busy}
               onConfirm={() => handleSuspend(dialog.user, dialog.to)}
