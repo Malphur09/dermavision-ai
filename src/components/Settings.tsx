@@ -57,7 +57,7 @@ export function Settings() {
   const [savingNotifications, setSavingNotifications] = useState(false);
   const [clinic, setClinic] = useState({
     name: "",
-    taxId: "",
+    mohFacilityNumber: "",
     address: "",
   });
   const [savingClinic, setSavingClinic] = useState(false);
@@ -69,7 +69,7 @@ export function Settings() {
     supabase
       .from("user_details")
       .select(
-        "full_name, specialty, license, phone, clinic_name, clinic_tax_id, clinic_address, notification_prefs"
+        "full_name, specialty, license, phone, clinic_name, moh_facility_number, clinic_address, notification_prefs"
       )
       .eq("id", user.id)
       .maybeSingle()
@@ -81,7 +81,7 @@ export function Settings() {
           setPhone(data.phone ?? "");
           setClinic({
             name: data.clinic_name ?? "",
-            taxId: data.clinic_tax_id ?? "",
+            mohFacilityNumber: data.moh_facility_number ?? "",
             address: data.clinic_address ?? "",
           });
           if (data.notification_prefs) {
@@ -105,6 +105,8 @@ export function Settings() {
     if (!email.trim()) errs.email = "Email is required";
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       errs.email = "Enter a valid email";
+    if (phone.trim() && !/^\+9665\d{8}$/.test(phone.trim()))
+      errs.phone = "Saudi mobile: +9665XXXXXXXX (12 digits after +)";
     setProfileErrors(errs);
     if (Object.keys(errs).length) {
       toast.error("Fix errors before saving");
@@ -213,7 +215,7 @@ export function Settings() {
     const { error } = await supabase.from("user_details").upsert({
       id: user.id,
       clinic_name: clinic.name.trim() || null,
-      clinic_tax_id: clinic.taxId.trim() || null,
+      moh_facility_number: clinic.mohFacilityNumber.trim() || null,
       clinic_address: clinic.address.trim() || null,
     });
     if (error) toast.error("Failed to save clinic");
@@ -337,8 +339,14 @@ export function Settings() {
                       type="tel"
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+1 555 0123"
+                      placeholder="+9665XXXXXXXX"
+                      aria-invalid={!!profileErrors.phone}
                     />
+                    {profileErrors.phone && (
+                      <p className="mt-1.5 text-xs text-destructive">
+                        {profileErrors.phone}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -528,13 +536,19 @@ export function Settings() {
               />
             </div>
             <div>
-              <Label htmlFor="tx" className="mb-1.5 block">
-                Tax ID
+              <Label htmlFor="moh" className="mb-1.5 block">
+                MOH Facility Number
               </Label>
               <Input
-                id="tx"
-                value={clinic.taxId}
-                onChange={(e) => setClinic((p) => ({ ...p, taxId: e.target.value }))}
+                id="moh"
+                value={clinic.mohFacilityNumber}
+                onChange={(e) =>
+                  setClinic((p) => ({
+                    ...p,
+                    mohFacilityNumber: e.target.value,
+                  }))
+                }
+                placeholder="e.g. 1-234567"
               />
             </div>
             <div>
