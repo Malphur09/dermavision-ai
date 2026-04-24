@@ -39,6 +39,7 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
     password?: string;
     firstName?: string;
     lastName?: string;
+    license?: string;
   }>({});
   const [loading, setLoading] = useState(false);
   const [confirmationSent, setConfirmationSent] = useState(false);
@@ -66,6 +67,10 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
     if (mode === "signup") {
       if (!firstName.trim()) next.firstName = "First name is required";
       if (!lastName.trim()) next.lastName = "Last name is required";
+      const lic = license.trim();
+      if (!lic) next.license = "SCFHS license number is required";
+      else if (!/^[A-Z0-9-]{6,20}$/i.test(lic))
+        next.license = "6–20 chars, letters/digits/dashes only";
     }
     setErrors(next);
     return Object.keys(next).length === 0;
@@ -91,7 +96,7 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
   };
 
   const clearErr = (
-    field: "email" | "password" | "firstName" | "lastName"
+    field: "email" | "password" | "firstName" | "lastName" | "license"
   ) => {
     if (errors[field]) {
       setErrors((p) => {
@@ -284,7 +289,7 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
               </Label>
               <Input
                 id="fn"
-                placeholder="Elena"
+                placeholder="Osama"
                 value={firstName}
                 onChange={(e) => {
                   setFirstName(e.target.value);
@@ -304,7 +309,7 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
               </Label>
               <Input
                 id="ln"
-                placeholder="Voss"
+                placeholder="Almutairi"
                 value={lastName}
                 onChange={(e) => {
                   setLastName(e.target.value);
@@ -411,17 +416,27 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
         {mode === "signup" && (
           <div>
             <Label htmlFor="lic" className="mb-1.5 block">
-              Medical license number
+              SCFHS License Number
             </Label>
             <Input
               id="lic"
-              placeholder="e.g. MD-28471"
+              placeholder="e.g. 19002220 or 11RM00001"
               value={license}
-              onChange={(e) => setLicense(e.target.value)}
+              onChange={(e) => {
+                setLicense(e.target.value);
+                clearErr("license");
+              }}
+              aria-invalid={!!errors.license}
             />
-            <p className="text-xs text-muted-foreground mt-1.5">
-              We verify against registry databases before granting access.
-            </p>
+            {errors.license ? (
+              <p className="mt-1.5 text-xs text-destructive">
+                {errors.license}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Saudi Commission for Health Specialties (SCFHS / Mumaris+).
+              </p>
+            )}
           </div>
         )}
 

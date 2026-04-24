@@ -107,6 +107,8 @@ export function Settings() {
       errs.email = "Enter a valid email";
     if (phone.trim() && !/^\+9665\d{8}$/.test(phone.trim()))
       errs.phone = "Saudi mobile: +9665XXXXXXXX (12 digits after +)";
+    if (license.trim() && !/^[A-Z0-9-]{6,20}$/i.test(license.trim()))
+      errs.license = "6–20 chars, letters/digits/dashes only";
     setProfileErrors(errs);
     if (Object.keys(errs).length) {
       toast.error("Fix errors before saving");
@@ -321,14 +323,25 @@ export function Settings() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="lic" className="mb-1.5 block">
-                      Medical license number
+                      SCFHS License Number
                     </Label>
                     <Input
                       id="lic"
                       value={license}
                       onChange={(e) => setLicense(e.target.value)}
-                      placeholder="e.g. MD-28471"
+                      placeholder="e.g. 19002220 or 11RM00001"
+                      aria-invalid={!!profileErrors.license}
                     />
+                    {profileErrors.license ? (
+                      <p className="mt-1.5 text-xs text-destructive">
+                        {profileErrors.license}
+                      </p>
+                    ) : (
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        Saudi Commission for Health Specialties (SCFHS /
+                        Mumaris+).
+                      </p>
+                    )}
                   </div>
                   <div>
                     <Label htmlFor="ph" className="mb-1.5 block">

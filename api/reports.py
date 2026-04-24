@@ -281,7 +281,7 @@ def _build_html(case: dict, user: dict, user_details: dict | None, sections: dic
     <div class="meta">
       <div><strong>{doctor_name}</strong></div>
       {f'<div>{clinic}</div>' if clinic else ''}
-      {f'<div>License {license_no}</div>' if license_no else ''}
+      {f'<div>SCFHS {license_no}</div>' if license_no else ''}
       <div class="mono">{generated_at}</div>
     </div>
   </header>
