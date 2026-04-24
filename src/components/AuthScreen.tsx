@@ -1,6 +1,7 @@
 "use client";
 import { useState, FormEvent } from "react";
 import {
+  AlertTriangle,
   ArrowRight,
   CheckCircle2,
   Eye,
@@ -19,11 +20,12 @@ import { LogoWord } from "@/components/primitives/Logo";
 
 interface AuthScreenProps {
   onLogin: () => void;
+  suspended?: boolean;
 }
 
 type Mode = "login" | "signup";
 
-export function AuthScreen({ onLogin }: AuthScreenProps) {
+export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -227,6 +229,24 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       <div className="mb-6">
         <LogoWord size={28} />
       </div>
+      {suspended && mode === "login" && (
+        <div
+          role="alert"
+          className="mb-6 flex items-start gap-3 rounded-md border border-destructive bg-destructive px-3.5 py-3 text-sm text-destructive-foreground shadow-card-md"
+        >
+          <AlertTriangle
+            size={16}
+            className="mt-0.5 shrink-0"
+            aria-hidden
+          />
+          <div className="flex-1">
+            <div className="font-medium leading-tight">Account suspended</div>
+            <div className="text-xs mt-1 opacity-90 leading-snug">
+              Contact an administrator to restore access.
+            </div>
+          </div>
+        </div>
+      )}
       <h1 className="text-2xl font-semibold tracking-tight mb-1">
         {mode === "login" ? "Welcome back" : "Create your account"}
       </h1>
