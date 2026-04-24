@@ -185,9 +185,16 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
     const next: Record<string, string> = {};
     if (!lesionSite) next.lesionSite = "Anatomical site is required";
     if (isNewPatient) {
+      const currentYear = new Date().getFullYear();
       if (!newPatientId.trim()) next.newPatientId = "Patient ID is required";
-      else if (!/^[A-Z]{2}-\d{4}-\d{3}$/i.test(newPatientId.trim()))
-        next.newPatientId = "Format: PT-2024-001";
+      else {
+        const m = newPatientId.trim().match(/^PT-(\d{4})-(\d{3,})$/i);
+        if (!m) {
+          next.newPatientId = `Format: PT-${currentYear}-001`;
+        } else if (parseInt(m[1], 10) < currentYear) {
+          next.newPatientId = `Year must be ${currentYear} or later`;
+        }
+      }
       if (!newPatientName.trim()) next.newPatientName = "Name is required";
       if (!newAge.trim()) next.newAge = "Age is required";
       else {
@@ -617,7 +624,7 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
                     </Label>
                     <Input
                       id="np-id"
-                      placeholder="PT-2024-001"
+                      placeholder={`PT-${new Date().getFullYear()}-001`}
                       value={newPatientId}
                       onChange={(e) => {
                         setNewPatientId(e.target.value);
@@ -692,7 +699,6 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
                         <SelectContent>
                           <SelectItem value="male">Male</SelectItem>
                           <SelectItem value="female">Female</SelectItem>
-                          <SelectItem value="other">Other</SelectItem>
                         </SelectContent>
                       </Select>
                       {errors.newSex && (

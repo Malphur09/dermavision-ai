@@ -1,6 +1,7 @@
 "use client";
 import { useState, FormEvent } from "react";
 import {
+  AlertTriangle,
   ArrowRight,
   CheckCircle2,
   Eye,
@@ -19,11 +20,12 @@ import { LogoWord } from "@/components/primitives/Logo";
 
 interface AuthScreenProps {
   onLogin: () => void;
+  suspended?: boolean;
 }
 
 type Mode = "login" | "signup";
 
-export function AuthScreen({ onLogin }: AuthScreenProps) {
+export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -31,10 +33,14 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
   const [lastName, setLastName] = useState("");
   const [license, setLicense] = useState("");
   const [showPw, setShowPw] = useState(false);
-  const [remember, setRemember] = useState(true);
-  const [errors, setErrors] = useState<{ email?: string; password?: string }>(
-    {}
-  );
+  const [remember, setRemember] = useState(false);
+  const [errors, setErrors] = useState<{
+    email?: string;
+    password?: string;
+    firstName?: string;
+    lastName?: string;
+    license?: string;
+  }>({});
   const [loading, setLoading] = useState(false);
   const [confirmationSent, setConfirmationSent] = useState(false);
   const [resetMode, setResetMode] = useState(false);
@@ -46,8 +52,26 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       next.email = "Enter a valid email address";
     if (!password.trim()) next.password = "Password is required";
-    else if (password.length < 6)
+    else if (mode === "signup") {
+      if (password.length < 8)
+        next.password = "At least 8 characters";
+      else if (!/[A-Z]/.test(password))
+        next.password = "Must contain an uppercase letter";
+      else if (!/[a-z]/.test(password))
+        next.password = "Must contain a lowercase letter";
+      else if (!/\d/.test(password))
+        next.password = "Must contain a number";
+    } else if (password.length < 6) {
       next.password = "Password must be at least 6 characters";
+    }
+    if (mode === "signup") {
+      if (!firstName.trim()) next.firstName = "First name is required";
+      if (!lastName.trim()) next.lastName = "Last name is required";
+      const lic = license.trim();
+      if (!lic) next.license = "SCFHS license number is required";
+      else if (!/^[A-Z0-9-]{6,20}$/i.test(lic))
+        next.license = "6–20 chars, letters/digits/dashes only";
+    }
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -71,7 +95,9 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
     setResetMode(false);
   };
 
-  const clearErr = (field: "email" | "password") => {
+  const clearErr = (
+    field: "email" | "password" | "firstName" | "lastName" | "license"
+  ) => {
     if (errors[field]) {
       setErrors((p) => {
         const n = { ...p };
@@ -113,14 +139,30 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
         toast.success("Account created. Welcome!");
         onLogin();
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+        const { data: signInData, error } =
+          await supabase.auth.signInWithPassword({
+            email,
+            password,
+          });
         if (error) {
           toast.error("Invalid email or password");
           setErrors({ email: " ", password: "Invalid email or password" });
           return;
+        }
+        const userId = signInData.user?.id;
+        if (userId) {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("suspended")
+            .eq("id", userId)
+            .maybeSingle();
+          if (profile?.suspended) {
+            await supabase.auth.signOut();
+            toast.error(
+              "Access not yet active. An administrator must approve your account."
+            );
+            return;
+          }
         }
         toast.success("Welcome back!");
         onLogin();
@@ -204,8 +246,9 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
             Check your email
           </h2>
           <p className="text-sm text-muted-foreground">
-            Confirmation link sent to <strong>{email}</strong>. Click it to
-            activate your account, then sign in.
+            Confirmation link sent to <strong>{email}</strong>. After you
+            confirm, an administrator will review your request — you&apos;ll be
+            notified once access is approved.
           </p>
           <Button
             variant="ghost"
@@ -227,12 +270,33 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
       <div className="mb-6">
         <LogoWord size={28} />
       </div>
+      {suspended && mode === "login" && (
+        <div
+          role="alert"
+          className="mb-6 flex items-start gap-3 rounded-md border border-destructive bg-destructive px-3.5 py-3 text-sm text-destructive-foreground shadow-card-md"
+        >
+          <AlertTriangle
+            size={16}
+            className="mt-0.5 shrink-0"
+            aria-hidden
+          />
+          <div className="flex-1">
+            <div className="font-medium leading-tight">
+              Access not yet active
+            </div>
+            <div className="text-xs mt-1 opacity-90 leading-snug">
+              If you just signed up, an administrator still needs to approve
+              your access. Otherwise, contact an administrator to restore it.
+            </div>
+          </div>
+        </div>
+      )}
       <h1 className="text-2xl font-semibold tracking-tight mb-1">
         {mode === "login" ? "Welcome back" : "Create your account"}
       </h1>
       <p className="text-sm text-muted-foreground mb-6">
         {mode === "login"
-          ? "Sign in to continue. Your role will be loaded automatically."
+          ? "Sign in to continue."
           : "Clinical access requires verification. A brief review follows sign-up."}
       </p>
 
@@ -245,10 +309,19 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
               </Label>
               <Input
                 id="fn"
-                placeholder="Elena"
+                placeholder="Osama"
                 value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                onChange={(e) => {
+                  setFirstName(e.target.value);
+                  clearErr("firstName");
+                }}
+                aria-invalid={!!errors.firstName}
               />
+              {errors.firstName && (
+                <p className="mt-1.5 text-xs text-destructive">
+                  {errors.firstName}
+                </p>
+              )}
             </div>
             <div>
               <Label htmlFor="ln" className="mb-1.5 block">
@@ -256,10 +329,19 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
               </Label>
               <Input
                 id="ln"
-                placeholder="Voss"
+                placeholder="Almutairi"
                 value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                onChange={(e) => {
+                  setLastName(e.target.value);
+                  clearErr("lastName");
+                }}
+                aria-invalid={!!errors.lastName}
               />
+              {errors.lastName && (
+                <p className="mt-1.5 text-xs text-destructive">
+                  {errors.lastName}
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -330,8 +412,14 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
               {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
             </button>
           </div>
-          {errors.password && (
+          {errors.password ? (
             <p className="mt-1.5 text-xs text-destructive">{errors.password}</p>
+          ) : (
+            mode === "signup" && (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                8+ chars, with uppercase, lowercase, and a number.
+              </p>
+            )
           )}
         </div>
 
@@ -348,17 +436,27 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
         {mode === "signup" && (
           <div>
             <Label htmlFor="lic" className="mb-1.5 block">
-              Medical license number
+              SCFHS License Number
             </Label>
             <Input
               id="lic"
-              placeholder="e.g. MD-28471"
+              placeholder="e.g. 19002220 or 11RM00001"
               value={license}
-              onChange={(e) => setLicense(e.target.value)}
+              onChange={(e) => {
+                setLicense(e.target.value);
+                clearErr("license");
+              }}
+              aria-invalid={!!errors.license}
             />
-            <p className="text-xs text-muted-foreground mt-1.5">
-              We verify against registry databases before granting access.
-            </p>
+            {errors.license ? (
+              <p className="mt-1.5 text-xs text-destructive">
+                {errors.license}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Saudi Commission for Health Specialties (SCFHS / Mumaris+).
+              </p>
+            )}
           </div>
         )}
 
@@ -486,9 +584,7 @@ export function AuthScreen({ onLogin }: AuthScreenProps) {
               }}
             />
             {/* MOCK: model stats copy */}
-            <span className="text-xs mono tracking-wide">
-              MODEL v3.2.1 · 91.3% ACCURACY
-            </span>
+            <span className="text-xs mono tracking-wide">MODEL v1.0</span>
           </div>
           <h2 className="text-4xl font-semibold tracking-tight mb-4 leading-tight">
             Decision support for

@@ -31,6 +31,9 @@
   --brand: 188 70% 38%;
   --brand-foreground: 0 0% 100%;
   --brand-soft: 188 70% 96%;
+
+  --input-background: 0 0% 100%;
+  --switch-background: 240 6% 78%;
 }
 
 .dark {
@@ -58,6 +61,9 @@
   --brand: 188 65% 50%;
   --brand-foreground: 0 0% 100%;
   --brand-soft: 188 50% 12%;
+
+  --input-background: 240 7% 10%;
+  --switch-background: 240 5% 28%;
 }
 
 /* Accent hue variants — set via <html data-accent="..."> */
@@ -99,6 +105,8 @@
   --color-brand: hsl(var(--brand));
   --color-brand-foreground: hsl(var(--brand-foreground));
   --color-brand-soft: hsl(var(--brand-soft));
+  --color-input-background: hsl(var(--input-background));
+  --color-switch-background: hsl(var(--switch-background));
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

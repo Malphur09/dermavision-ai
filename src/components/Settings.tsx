@@ -57,7 +57,7 @@ export function Settings() {
   const [savingNotifications, setSavingNotifications] = useState(false);
   const [clinic, setClinic] = useState({
     name: "",
-    taxId: "",
+    mohFacilityNumber: "",
     address: "",
   });
   const [savingClinic, setSavingClinic] = useState(false);
@@ -69,7 +69,7 @@ export function Settings() {
     supabase
       .from("user_details")
       .select(
-        "full_name, specialty, license, phone, clinic_name, clinic_tax_id, clinic_address, notification_prefs"
+        "full_name, specialty, license, phone, clinic_name, moh_facility_number, clinic_address, notification_prefs"
       )
       .eq("id", user.id)
       .maybeSingle()
@@ -81,7 +81,7 @@ export function Settings() {
           setPhone(data.phone ?? "");
           setClinic({
             name: data.clinic_name ?? "",
-            taxId: data.clinic_tax_id ?? "",
+            mohFacilityNumber: data.moh_facility_number ?? "",
             address: data.clinic_address ?? "",
           });
           if (data.notification_prefs) {
@@ -105,6 +105,10 @@ export function Settings() {
     if (!email.trim()) errs.email = "Email is required";
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       errs.email = "Enter a valid email";
+    if (phone.trim() && !/^\+9665\d{8}$/.test(phone.trim()))
+      errs.phone = "Saudi mobile: +9665XXXXXXXX (12 digits after +)";
+    if (license.trim() && !/^[A-Z0-9-]{6,20}$/i.test(license.trim()))
+      errs.license = "6–20 chars, letters/digits/dashes only";
     setProfileErrors(errs);
     if (Object.keys(errs).length) {
       toast.error("Fix errors before saving");
@@ -213,7 +217,7 @@ export function Settings() {
     const { error } = await supabase.from("user_details").upsert({
       id: user.id,
       clinic_name: clinic.name.trim() || null,
-      clinic_tax_id: clinic.taxId.trim() || null,
+      moh_facility_number: clinic.mohFacilityNumber.trim() || null,
       clinic_address: clinic.address.trim() || null,
     });
     if (error) toast.error("Failed to save clinic");
@@ -240,9 +244,11 @@ export function Settings() {
             <Shield size={14} /> Security
           </TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
-          <TabsTrigger value="clinic">
-            <Building2 size={14} /> Clinic
-          </TabsTrigger>
+          {role === "admin" && (
+            <TabsTrigger value="clinic">
+              <Building2 size={14} /> Clinic
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="profile" className="mt-5">
@@ -319,14 +325,25 @@ export function Settings() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="lic" className="mb-1.5 block">
-                      Medical license number
+                      SCFHS License Number
                     </Label>
                     <Input
                       id="lic"
                       value={license}
                       onChange={(e) => setLicense(e.target.value)}
-                      placeholder="e.g. MD-28471"
+                      placeholder="e.g. 19002220 or 11RM00001"
+                      aria-invalid={!!profileErrors.license}
                     />
+                    {profileErrors.license ? (
+                      <p className="mt-1.5 text-xs text-destructive">
+                        {profileErrors.license}
+                      </p>
+                    ) : (
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        Saudi Commission for Health Specialties (SCFHS /
+                        Mumaris+).
+                      </p>
+                    )}
                   </div>
                   <div>
                     <Label htmlFor="ph" className="mb-1.5 block">
@@ -337,8 +354,14 @@ export function Settings() {
                       type="tel"
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+1 555 0123"
+                      placeholder="+9665XXXXXXXX"
+                      aria-invalid={!!profileErrors.phone}
                     />
+                    {profileErrors.phone && (
+                      <p className="mt-1.5 text-xs text-destructive">
+                        {profileErrors.phone}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -515,6 +538,7 @@ export function Settings() {
           </div>
         </TabsContent>
 
+        {role === "admin" && (
         <TabsContent value="clinic" className="mt-5">
           <div className="rounded-lg border border-border bg-card p-6 flex flex-col gap-4">
             <div>
@@ -528,13 +552,19 @@ export function Settings() {
               />
             </div>
             <div>
-              <Label htmlFor="tx" className="mb-1.5 block">
-                Tax ID
+              <Label htmlFor="moh" className="mb-1.5 block">
+                MOH Facility Number
               </Label>
               <Input
-                id="tx"
-                value={clinic.taxId}
-                onChange={(e) => setClinic((p) => ({ ...p, taxId: e.target.value }))}
+                id="moh"
+                value={clinic.mohFacilityNumber}
+                onChange={(e) =>
+                  setClinic((p) => ({
+                    ...p,
+                    mohFacilityNumber: e.target.value,
+                  }))
+                }
+                placeholder="e.g. 1-234567"
               />
             </div>
             <div>
@@ -560,6 +590,7 @@ export function Settings() {
             </div>
           </div>
         </TabsContent>
+        )}
       </Tabs>
     </div>
   );

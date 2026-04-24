@@ -35,8 +35,20 @@ export default function ResetPasswordPage() {
 
   const submit = async () => {
     setError(null);
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters");
+    if (password.length < 8) {
+      setError("At least 8 characters");
+      return;
+    }
+    if (!/[A-Z]/.test(password)) {
+      setError("Must contain an uppercase letter");
+      return;
+    }
+    if (!/[a-z]/.test(password)) {
+      setError("Must contain a lowercase letter");
+      return;
+    }
+    if (!/\d/.test(password)) {
+      setError("Must contain a number");
       return;
     }
     if (password !== confirm) {
@@ -113,6 +125,9 @@ export default function ResetPasswordPage() {
                 disabled={!ready || submitting}
               />
             </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              8+ chars, with uppercase, lowercase, and a number.
+            </p>
           </div>
           <div>
             <Label htmlFor="confirm-pw" className="mb-1.5 block">

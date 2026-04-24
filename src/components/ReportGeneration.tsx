@@ -1,13 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  Download,
-  Eye,
-  FileJson,
-  FileText,
-} from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { AlertTriangle, Download, FileJson, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
@@ -27,6 +21,20 @@ interface CaseSession {
   confidence: number | null;
   riskLevel: string;
 }
+
+interface PastReport {
+  id: string;
+  case_id: string;
+  format: "pdf" | "json";
+  file_url: string | null;
+  created_at: string;
+  sections: Record<string, boolean> | null;
+  cases: {
+    patients: { patient_id: string | null; name: string | null } | null;
+  } | null;
+}
+
+const REPORTS_BUCKET = "reports";
 
 const SECTIONS = [
   {
@@ -67,7 +75,10 @@ const RISK_COLOR: Record<string, string> = {
 export function ReportGeneration() {
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const paramCaseId = searchParams.get("caseId");
   const [caseData, setCaseData] = useState<CaseSession | null>(null);
+  const [loadingCase, setLoadingCase] = useState(true);
   const [sections, setSections] = useState<Record<SectionKey, boolean>>({
     patientInfo: true,
     diagnosisResults: true,
@@ -77,8 +88,107 @@ export function ReportGeneration() {
   });
   const [format, setFormat] = useState<"pdf" | "json">("pdf");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [lastExport, setLastExport] = useState<{
+    url: string;
+    format: string;
+    at: number;
+  } | null>(null);
+  const [pastReports, setPastReports] = useState<PastReport[]>([]);
+  const [loadingReports, setLoadingReports] = useState(true);
+  const [openingReportId, setOpeningReportId] = useState<string | null>(null);
+
+  const loadPastReports = async () => {
+    if (!user) return;
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("reports")
+      .select(
+        "id, case_id, format, file_url, created_at, sections, cases(patients(patient_id, name))"
+      )
+      .eq("doctor_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (error) {
+      setLoadingReports(false);
+      return;
+    }
+    setPastReports((data ?? []) as unknown as PastReport[]);
+    setLoadingReports(false);
+  };
 
   useEffect(() => {
+    void loadPastReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  const openPastReport = async (r: PastReport) => {
+    if (!r.file_url) {
+      toast.error("Report file missing");
+      return;
+    }
+    setOpeningReportId(r.id);
+    const supabase = createClient();
+    const { data, error } = await supabase.storage
+      .from(REPORTS_BUCKET)
+      .createSignedUrl(r.file_url, 60 * 60, {
+        download: `dermavision-${r.case_id.slice(0, 8)}.${r.format}`,
+      });
+    setOpeningReportId(null);
+    if (error || !data?.signedUrl) {
+      toast.error("Failed to generate download link");
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = data.signedUrl;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  useEffect(() => {
+    const supabase = createClient();
+
+    const loadById = async (id: string) => {
+      const { data, error } = await supabase
+        .from("cases")
+        .select(
+          "id, predicted_class, confidence, risk_level, patients(patient_id, name)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+      if (error || !data) {
+        setLoadingCase(false);
+        return;
+      }
+      const row = data as unknown as {
+        id: string;
+        predicted_class: string | null;
+        confidence: number | null;
+        risk_level: string | null;
+        patients: { patient_id: string | null; name: string | null } | null;
+      };
+      const pid = row.patients?.patient_id ?? undefined;
+      const pname = row.patients?.name ?? undefined;
+      setCaseData({
+        caseId: row.id,
+        patientId: pid,
+        patientName: pname,
+        patientLabel: [pid, pname].filter(Boolean).join(" · "),
+        predictedClass: row.predicted_class ?? "Unknown",
+        confidence:
+          typeof row.confidence === "number" ? row.confidence : null,
+        riskLevel: row.risk_level ?? "Benign",
+      });
+      setLoadingCase(false);
+    };
+
+    if (paramCaseId) {
+      void loadById(paramCaseId);
+      return;
+    }
+
     const raw = sessionStorage.getItem("lastCase");
     if (raw) {
       try {
@@ -87,21 +197,13 @@ export function ReportGeneration() {
         /* ignore */
       }
     }
-  }, []);
+    setLoadingCase(false);
+  }, [paramCaseId]);
 
   const toggle = (k: SectionKey) =>
     setSections((p) => ({ ...p, [k]: !p[k] }));
 
   const hasAnySection = Object.values(sections).some(Boolean);
-
-  const handlePreview = () => {
-    if (!hasAnySection) {
-      toast.error("Select at least one section");
-      return;
-    }
-    // MOCK: preview
-    toast.info("Preview coming soon");
-  };
 
   const handleExport = async () => {
     if (!hasAnySection) {
@@ -116,26 +218,77 @@ export function ReportGeneration() {
     const toastId = toast.loading(
       `Generating ${format.toUpperCase()} report…`
     );
-    const supabase = createClient();
-    const { error } = await supabase.from("reports").insert({
-      case_id: caseData.caseId,
-      doctor_id: user.id,
-      sections,
-      format,
-    });
-    toast.dismiss(toastId);
-    if (error) {
-      toast.error("Failed to save report");
-    } else {
-      toast.success(`Report saved as ${format.toUpperCase()}`);
+    try {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) throw new Error("No active session");
+      const resp = await fetch("/api/reports/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          case_id: caseData.caseId,
+          sections,
+          format,
+        }),
+      });
+      toast.dismiss(toastId);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        toast.error(err.error || "Failed to generate report");
+        return;
+      }
+      const data: { signed_url: string; format: string } = await resp.json();
+      const filename = `dermavision-${caseData.caseId.slice(0, 8)}.${data.format}`;
+      const downloadUrl =
+        data.signed_url +
+        (data.signed_url.includes("?") ? "&" : "?") +
+        `download=${encodeURIComponent(filename)}`;
+      setLastExport({ url: downloadUrl, format: data.format, at: Date.now() });
+      // Anchor-click bypasses most pop-up blockers (user-gesture context is
+      // already broken by the await, but a real anchor navigation is still
+      // allowed by most browsers where window.open would be blocked).
+      // The ?download=<name> query makes Supabase return Content-Disposition:
+      // attachment, so JSON (and PDF) download to disk instead of rendering
+      // inline.
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast.success(`Report ready — ${data.format.toUpperCase()}`, {
+        action: {
+          label: "Open",
+          onClick: () => {
+            const link = document.createElement("a");
+            link.href = downloadUrl;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.click();
+          },
+        },
+      });
       void logPhiAccess({
         resource_type: "case",
         resource_id: caseData.caseId,
         action: "exported",
         metadata: { format, sections },
       });
+      void loadPastReports();
+    } catch (e) {
+      toast.dismiss(toastId);
+      toast.error(
+        e instanceof Error ? e.message : "Failed to generate report"
+      );
+    } finally {
+      setIsGenerating(false);
     }
-    setIsGenerating(false);
   };
 
   const patientLabel =
@@ -158,16 +311,29 @@ export function ReportGeneration() {
         breadcrumb={["Doctor", "Reports"]}
       />
 
-      {!caseData && (
+      {!caseData && !loadingCase && (
         <div className="mb-5">
           <Alert variant="warning" title="No case loaded">
-            <button
-              onClick={() => router.push("/diagnostic")}
-              className="underline font-medium text-foreground"
-            >
-              Run a diagnosis first
-            </button>{" "}
-            to populate the report.
+            {paramCaseId ? (
+              <>Could not load case <span className="mono">{paramCaseId.slice(0, 8)}</span>. It may not exist or you may not have access.</>
+            ) : (
+              <>
+                <button
+                  onClick={() => router.push("/diagnostic")}
+                  className="underline font-medium text-foreground"
+                >
+                  Run a diagnosis first
+                </button>{" "}
+                or pick one from{" "}
+                <button
+                  onClick={() => router.push("/records")}
+                  className="underline font-medium text-foreground"
+                >
+                  Patient Records
+                </button>
+                .
+              </>
+            )}
           </Alert>
         </div>
       )}
@@ -315,9 +481,6 @@ export function ReportGeneration() {
             </Alert>
 
             <div className="mt-5 flex gap-3 flex-wrap">
-              <Button variant="outline" onClick={handlePreview}>
-                <Eye size={14} /> Preview
-              </Button>
               <Button
                 variant="brand"
                 onClick={handleExport}
@@ -326,13 +489,119 @@ export function ReportGeneration() {
               >
                 <Download size={14} />
                 {isGenerating
-                  ? "Saving…"
+                  ? "Generating…"
                   : `Generate ${format.toUpperCase()}`}
               </Button>
             </div>
+            {lastExport && (
+              <div className="mt-4 rounded-md border border-border bg-muted/30 p-3 flex items-center gap-3">
+                <FileText size={14} className="text-muted-foreground shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium">
+                    Last export · {lastExport.format.toUpperCase()}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Generated {new Date(lastExport.at).toLocaleTimeString()} ·
+                    link expires in ~1 hour
+                  </div>
+                </div>
+                <a
+                  href={lastExport.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-medium text-brand underline whitespace-nowrap"
+                >
+                  Open file
+                </a>
+              </div>
+            )}
             <p className="text-[11px] text-muted-foreground mt-3">
-              Preview only — server-side PDF export coming in a later release.
+              File opens in a new tab. If your browser blocks it, use the{" "}
+              <strong>Open file</strong> link above. Download link expires after
+              1 hour.
             </p>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-card">
+          <div className="p-5 border-b border-border flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">Generated reports</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Your last 20 exports. Links are regenerated on open.
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setLoadingReports(true);
+                void loadPastReports();
+              }}
+            >
+              Refresh
+            </Button>
+          </div>
+          <div>
+            {loadingReports ? (
+              <div className="p-5 text-sm text-muted-foreground">
+                Loading…
+              </div>
+            ) : pastReports.length === 0 ? (
+              <div className="p-5 text-sm text-muted-foreground">
+                No reports yet. Generate one above.
+              </div>
+            ) : (
+              <ul className="divide-y divide-border">
+                {pastReports.map((r) => {
+                  const patient = r.cases?.patients;
+                  const patientLabel =
+                    patient?.patient_id && patient?.name
+                      ? `${patient.patient_id} · ${patient.name}`
+                      : patient?.patient_id ||
+                        patient?.name ||
+                        `Case ${r.case_id.slice(0, 8)}`;
+                  return (
+                    <li
+                      key={r.id}
+                      className="flex items-center gap-3 px-5 py-3"
+                    >
+                      <div className="shrink-0 w-9 h-9 rounded-md bg-muted/60 flex items-center justify-center">
+                        {r.format === "pdf" ? (
+                          <FileText
+                            size={16}
+                            className="text-muted-foreground"
+                          />
+                        ) : (
+                          <FileJson
+                            size={16}
+                            className="text-muted-foreground"
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">
+                          {patientLabel}
+                        </div>
+                        <div className="text-xs text-muted-foreground mono">
+                          {r.format.toUpperCase()} ·{" "}
+                          {new Date(r.created_at).toLocaleString()}
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openPastReport(r)}
+                        disabled={openingReportId === r.id || !r.file_url}
+                      >
+                        <Download size={12} />
+                        {openingReportId === r.id ? "Opening…" : "Open"}
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         </div>
       </div>

@@ -51,6 +51,7 @@ interface UserRow {
   full_name: string | null;
   scans_count: number;
   suspended: boolean;
+  approved_at: string | null;
 }
 
 type Status = "active" | "pending" | "suspended";
@@ -76,9 +77,13 @@ const STATUS_STYLE: Record<Status, { bg: string; color: string }> = {
 };
 
 function computeStatus(u: UserRow): Status {
-  if (u.suspended) return "suspended";
-  if (u.last_sign_in_at) return "active";
-  return "pending";
+  if (u.suspended) {
+    // Never-approved accounts are pending admin review. Previously-approved
+    // accounts that are now suspended are actively suspended — approved_at
+    // is stamped the first time an admin un-suspends a user.
+    return u.approved_at ? "suspended" : "pending";
+  }
+  return "active";
 }
 
 function augment(u: UserRow): AugmentedUser {
@@ -175,7 +180,13 @@ export function AdminManagement() {
       toast.error(error.message || "Failed to update suspension");
       return;
     }
-    toast.success(v ? `${target.email} suspended` : `${target.email} restored`);
+    toast.success(
+      v
+        ? `${target.email} suspended`
+        : target.approved_at
+          ? `${target.email} restored`
+          : `${target.email} approved`
+    );
     setDialog(null);
     await refresh();
   };
@@ -409,7 +420,10 @@ export function AdminManagement() {
                                   })
                                 }
                               >
-                                <UserCheck size={14} /> Restore access
+                                <UserCheck size={14} />{" "}
+                                {u.approved_at
+                                  ? "Restore access"
+                                  : "Approve access"}
                               </DropdownMenuItem>
                             ) : (
                               <DropdownMenuItem
@@ -452,13 +466,27 @@ export function AdminManagement() {
           )}
           {dialog?.kind === "suspend" && (
             <ConfirmBody
-              title={dialog.to ? "Suspend user?" : "Restore access?"}
+              title={
+                dialog.to
+                  ? "Suspend user?"
+                  : dialog.user.approved_at
+                    ? "Restore access?"
+                    : "Approve access?"
+              }
               description={
                 dialog.to
                   ? `${dialog.user.email} will be signed out and blocked from signing in.`
-                  : `${dialog.user.email} will regain access on next sign-in.`
+                  : dialog.user.approved_at
+                    ? `${dialog.user.email} will regain access on next sign-in.`
+                    : `${dialog.user.email} has been waiting for approval. They will be able to sign in after you approve.`
               }
-              confirmLabel={dialog.to ? "Suspend" : "Restore"}
+              confirmLabel={
+                dialog.to
+                  ? "Suspend"
+                  : dialog.user.approved_at
+                    ? "Restore"
+                    : "Approve"
+              }
               destructive={dialog.to}
               busy={busy}
               onConfirm={() => handleSuspend(dialog.user, dialog.to)}

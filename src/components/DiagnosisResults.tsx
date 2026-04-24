@@ -250,8 +250,28 @@ export function DiagnosisResults() {
 
     const raw = sessionStorage.getItem("lastCase");
     if (!raw) {
-      setLoadingImage(false);
-      setHeatmapPending(false);
+      // No fresh scan in this session — fall back to the most recent case
+      // for the current user. RLS on `cases` limits the query to the
+      // caller's own rows (admins could also hit this path but the page is
+      // doctor-oriented).
+      const loadLatest = async () => {
+        const { data, error } = await supabase
+          .from("cases")
+          .select(
+            "id, image_url, gradcam_url, predicted_class, probabilities, confidence, risk_level, lesion_site, status, notes, patients(patient_id, name)"
+          )
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (error || !data) {
+          setLoadingImage(false);
+          setHeatmapPending(false);
+          return;
+        }
+        const row = data as unknown as Parameters<typeof hydrateFromRow>[0];
+        await hydrateFromRow(row);
+      };
+      void loadLatest();
       return;
     }
     let parsed: CaseSession;
@@ -443,7 +463,9 @@ export function DiagnosisResults() {
             </Button>
             <Button
               variant="outline"
-              onClick={() => router.push("/report")}
+              onClick={() =>
+                router.push(`/report?caseId=${caseData.caseId}`)
+              }
               title="Generate report"
             >
               <Download size={14} /> Export PDF

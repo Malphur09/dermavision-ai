@@ -23,40 +23,13 @@ ISIC_CLASSES = [
 
 MODEL_VERSIONS = [
     {
-        "version": "v3.2.1",
+        "version": "v1.0",
         "status": "production",
         "accuracy": 0.913,
         "date": "2026-03-28",
-        "architecture": "EfficientNetV2-L + CBAM",
-        "params": "119M",
-        "notes": "Production model. Balanced augmentation with focal loss.",
-    },
-    {
-        "version": "v3.3.0-rc1",
-        "status": "staging",
-        "accuracy": 0.921,
-        "date": "2026-04-11",
-        "architecture": "EfficientNetV2-L + CBAM",
-        "params": "120M",
-        "notes": "Release candidate. Improved recall on MEL and SCC.",
-    },
-    {
-        "version": "v3.2.0",
-        "status": "archived",
-        "accuracy": 0.908,
-        "date": "2026-02-15",
-        "architecture": "EfficientNetV2-L",
-        "params": "118M",
-        "notes": "Previous baseline.",
-    },
-    {
-        "version": "v3.1.4",
-        "status": "archived",
-        "accuracy": 0.895,
-        "date": "2025-12-04",
         "architecture": "EfficientNetB4",
         "params": "19M",
-        "notes": "Lightweight version for edge devices.",
+        "notes": "Initial production model.",
     },
 ]
 
@@ -194,6 +167,6 @@ def model_upload_benchmark():
 @metrics_bp.route("/model/deploy", methods=["POST"])
 def model_deploy():
     payload = request.get_json(silent=True) or {}
-    version = payload.get("version", "v3.3.0-rc1")
+    version = payload.get("version", "v1.0")
     time.sleep(1.0)
     return jsonify({"deployed": True, "version": version, "synthetic": True})

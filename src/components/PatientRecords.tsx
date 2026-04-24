@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   ChevronLeft,
@@ -13,13 +13,30 @@ import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
 import { logPhiAccess } from "@/lib/audit";
+import { useAuth } from "@/contexts/AuthContext";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface PatientRecord {
   patientDbId: string;
@@ -62,59 +79,70 @@ const RISK_BADGE: Record<
 
 export function PatientRecords() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get("q") ?? "";
+  const { user } = useAuth();
   const [records, setRecords] = useState<PatientRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialQuery);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [page, setPage] = useState(1);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addPatientId, setAddPatientId] = useState("");
+  const [addName, setAddName] = useState("");
+  const [addAge, setAddAge] = useState("");
+  const [addSex, setAddSex] = useState<"male" | "female" | "">("");
+  const [addErrors, setAddErrors] = useState<Record<string, string>>({});
+
+  const loadRecords = async () => {
+    const supabase = createClient();
+    const { data, error } = await supabase.rpc("get_patient_records");
+
+    if (error) {
+      toast.error("Failed to load patient records");
+      setLoading(false);
+      return;
+    }
+
+    const rows = (data ?? []) as Array<{
+      patient_db_id: string;
+      patient_id: string;
+      name: string;
+      age: number | null;
+      sex: string | null;
+      latest_case_id: string | null;
+      latest_predicted_class: string | null;
+      latest_confidence: number | null;
+      latest_risk_level: string | null;
+      latest_created_at: string | null;
+      scans_count: number;
+    }>;
+
+    setRecords(
+      rows.map((r) => ({
+        patientDbId: r.patient_db_id,
+        patientId: r.patient_id,
+        name: r.name,
+        age: r.age,
+        sex: r.sex,
+        lastDiagnosis: r.latest_created_at
+          ? new Date(r.latest_created_at).toLocaleDateString("en-CA")
+          : null,
+        prediction: r.latest_predicted_class,
+        confidence: r.latest_confidence != null ? Number(r.latest_confidence) : null,
+        risk:
+          (r.latest_risk_level as "High Risk" | "Moderate Risk" | "Benign" | null) ??
+          null,
+        scans: Number(r.scans_count) || 0,
+        caseId: r.latest_case_id,
+      }))
+    );
+    setLoading(false);
+  };
 
   useEffect(() => {
-    const load = async () => {
-      const supabase = createClient();
-      const { data, error } = await supabase.rpc("get_patient_records");
-
-      if (error) {
-        toast.error("Failed to load patient records");
-        setLoading(false);
-        return;
-      }
-
-      const rows = (data ?? []) as Array<{
-        patient_db_id: string;
-        patient_id: string;
-        name: string;
-        age: number | null;
-        sex: string | null;
-        latest_case_id: string | null;
-        latest_predicted_class: string | null;
-        latest_confidence: number | null;
-        latest_risk_level: string | null;
-        latest_created_at: string | null;
-        scans_count: number;
-      }>;
-
-      setRecords(
-        rows.map((r) => ({
-          patientDbId: r.patient_db_id,
-          patientId: r.patient_id,
-          name: r.name,
-          age: r.age,
-          sex: r.sex,
-          lastDiagnosis: r.latest_created_at
-            ? new Date(r.latest_created_at).toLocaleDateString("en-CA")
-            : null,
-          prediction: r.latest_predicted_class,
-          confidence: r.latest_confidence != null ? Number(r.latest_confidence) : null,
-          risk:
-            (r.latest_risk_level as "High Risk" | "Moderate Risk" | "Benign" | null) ??
-            null,
-          scans: Number(r.scans_count) || 0,
-          caseId: r.latest_case_id,
-        }))
-      );
-      setLoading(false);
-    };
-    load();
+    void loadRecords();
   }, []);
 
   const filtered = useMemo(
@@ -136,6 +164,125 @@ export function PatientRecords() {
 
   const highRiskCount = records.filter((r) => r.risk === "High Risk").length;
 
+  const exportCsv = () => {
+    if (filtered.length === 0) {
+      toast.error("Nothing to export");
+      return;
+    }
+    const headers = [
+      "Patient ID",
+      "Name",
+      "Age",
+      "Sex",
+      "Last diagnosis",
+      "Prediction",
+      "Confidence",
+      "Risk",
+      "Scans",
+    ];
+    const escape = (v: string | number | null | undefined) => {
+      if (v === null || v === undefined) return "";
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [headers.join(",")];
+    filtered.forEach((r) => {
+      lines.push(
+        [
+          r.patientId,
+          r.name,
+          r.age,
+          r.sex,
+          r.lastDiagnosis
+            ? new Date(r.lastDiagnosis).toISOString().slice(0, 10)
+            : "",
+          r.prediction,
+          r.confidence != null ? r.confidence.toFixed(1) : "",
+          r.risk,
+          r.scans,
+        ]
+          .map(escape)
+          .join(",")
+      );
+    });
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `patients-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${filtered.length} patient(s)`);
+  };
+
+  const resetAddForm = () => {
+    setAddPatientId("");
+    setAddName("");
+    setAddAge("");
+    setAddSex("");
+    setAddErrors({});
+  };
+
+  const submitAddPatient = async () => {
+    if (!user) {
+      toast.error("Not signed in");
+      return;
+    }
+    const errs: Record<string, string> = {};
+    const pid = addPatientId.trim().toUpperCase();
+    const currentYear = new Date().getFullYear();
+    if (!pid) errs.patientId = "Patient ID is required";
+    else {
+      const m = pid.match(/^PT-(\d{4})-(\d{3,})$/);
+      if (!m) errs.patientId = `Format: PT-${currentYear}-001`;
+      else if (parseInt(m[1], 10) < currentYear)
+        errs.patientId = `Year must be ${currentYear} or later`;
+    }
+    if (!addName.trim()) errs.name = "Name is required";
+    const ageNum = parseInt(addAge, 10);
+    if (!addAge.trim()) errs.age = "Age is required";
+    else if (Number.isNaN(ageNum) || ageNum < 0 || ageNum > 120)
+      errs.age = "0–120";
+    if (!addSex) errs.sex = "Sex is required";
+    setAddErrors(errs);
+    if (Object.keys(errs).length) return;
+
+    setAddBusy(true);
+    const supabase = createClient();
+    const { data: existing } = await supabase
+      .from("patients")
+      .select("id")
+      .eq("patient_id", pid)
+      .maybeSingle();
+    if (existing) {
+      setAddErrors({ patientId: "Patient ID already exists" });
+      setAddBusy(false);
+      return;
+    }
+    const { error } = await supabase.from("patients").insert({
+      patient_id: pid,
+      name: addName.trim(),
+      age: ageNum,
+      sex: addSex,
+      created_by: user.id,
+    });
+    setAddBusy(false);
+    if (error) {
+      toast.error("Failed to add patient");
+      return;
+    }
+    toast.success(`${addName.trim()} added`);
+    resetAddForm();
+    setAddOpen(false);
+    setLoading(true);
+    await loadRecords();
+  };
+
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <PageHeader
@@ -144,14 +291,14 @@ export function PatientRecords() {
         breadcrumb={["Doctor", "Patients"]}
         actions={
           <>
-            {/* MOCK: export action */}
-            <Button variant="outline">
-              <Download size={14} /> Export
-            </Button>
             <Button
-              variant="brand"
-              onClick={() => router.push("/diagnostic?new=1")}
+              variant="outline"
+              onClick={exportCsv}
+              title="Export filtered list as CSV"
             >
+              <Download size={14} /> Export CSV
+            </Button>
+            <Button variant="brand" onClick={() => setAddOpen(true)}>
               <Plus size={14} /> New patient
             </Button>
           </>
@@ -339,6 +486,156 @@ export function PatientRecords() {
           </div>
         )}
       </div>
+
+      <Dialog
+        open={addOpen}
+        onOpenChange={(o) => {
+          setAddOpen(o);
+          if (!o) resetAddForm();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New patient</DialogTitle>
+            <DialogDescription>
+              Add a patient to your records. You can run a diagnosis for them
+              from the diagnostic screen.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">
+            <div>
+              <Label htmlFor="np-id" className="mb-1.5 block">
+                Patient ID
+              </Label>
+              <Input
+                id="np-id"
+                placeholder={`PT-${new Date().getFullYear()}-001`}
+                value={addPatientId}
+                onChange={(e) => {
+                  setAddPatientId(e.target.value);
+                  setAddErrors((p) => {
+                    const n = { ...p };
+                    delete n.patientId;
+                    return n;
+                  });
+                }}
+                aria-invalid={!!addErrors.patientId}
+                disabled={addBusy}
+              />
+              {addErrors.patientId && (
+                <p className="mt-1.5 text-xs text-destructive">
+                  {addErrors.patientId}
+                </p>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="np-name" className="mb-1.5 block">
+                Full name
+              </Label>
+              <Input
+                id="np-name"
+                placeholder="Full name"
+                value={addName}
+                onChange={(e) => {
+                  setAddName(e.target.value);
+                  setAddErrors((p) => {
+                    const n = { ...p };
+                    delete n.name;
+                    return n;
+                  });
+                }}
+                aria-invalid={!!addErrors.name}
+                disabled={addBusy}
+              />
+              {addErrors.name && (
+                <p className="mt-1.5 text-xs text-destructive">
+                  {addErrors.name}
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="np-age" className="mb-1.5 block">
+                  Age
+                </Label>
+                <Input
+                  id="np-age"
+                  type="number"
+                  min={0}
+                  max={120}
+                  placeholder="42"
+                  value={addAge}
+                  onChange={(e) => {
+                    setAddAge(e.target.value);
+                    setAddErrors((p) => {
+                      const n = { ...p };
+                      delete n.age;
+                      return n;
+                    });
+                  }}
+                  aria-invalid={!!addErrors.age}
+                  disabled={addBusy}
+                />
+                {addErrors.age && (
+                  <p className="mt-1.5 text-xs text-destructive">
+                    {addErrors.age}
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="np-sex" className="mb-1.5 block">
+                  Sex
+                </Label>
+                <Select
+                  value={addSex}
+                  onValueChange={(v: "male" | "female") => {
+                    setAddSex(v);
+                    setAddErrors((p) => {
+                      const n = { ...p };
+                      delete n.sex;
+                      return n;
+                    });
+                  }}
+                  disabled={addBusy}
+                >
+                  <SelectTrigger
+                    id="np-sex"
+                    aria-invalid={!!addErrors.sex}
+                  >
+                    <SelectValue placeholder="Select" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="male">Male</SelectItem>
+                    <SelectItem value="female">Female</SelectItem>
+                  </SelectContent>
+                </Select>
+                {addErrors.sex && (
+                  <p className="mt-1.5 text-xs text-destructive">
+                    {addErrors.sex}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setAddOpen(false)}
+              disabled={addBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="brand"
+              onClick={submitAddPatient}
+              disabled={addBusy}
+            >
+              <Plus size={14} />
+              {addBusy ? "Adding…" : "Add patient"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
