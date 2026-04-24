@@ -25,10 +25,12 @@ from api.admin import admin_bp  # noqa: E402
 from api.metrics import metrics_bp, insert_telemetry  # noqa: E402
 from api.auth import auth_bp  # noqa: E402
 from api.reports import reports_bp  # noqa: E402
+from api.model_lifecycle import model_lifecycle_bp  # noqa: E402
 app.register_blueprint(admin_bp)
 app.register_blueprint(metrics_bp)
 app.register_blueprint(auth_bp)
 app.register_blueprint(reports_bp)
+app.register_blueprint(model_lifecycle_bp)
 
 CLASSES = [
     "Melanoma",
@@ -46,27 +48,88 @@ MODEL_PATH = os.getenv("MODEL_PATH", "efficientnetb4_isic2019.onnx")
 torch_model: nn.Module | None = None
 target_layer: nn.Module | None = None
 _cam_lock = threading.Lock()
+_model_swap_lock = threading.Lock()
+
+# Lazy version check: every N seconds per worker, consult model_versions for
+# the active production row. If its onnx_path differs from what we loaded,
+# pull the new artifact from storage and hot-swap. This means multiple
+# gunicorn workers reconcile independently without SIGHUP or flag files.
+_active_version_id: str | None = None
+_active_path: str | None = None
+_version_last_checked: float = 0.0
+_VERSION_TTL_S: float = 60.0
 
 
-def _load_model():
+def _set_active_model(model: nn.Module) -> None:
     global torch_model, target_layer
+    last_conv = None
+    for m in model.modules():
+        if isinstance(m, nn.Conv2d):
+            last_conv = m
+    if last_conv is None:
+        raise RuntimeError("No Conv2d found in converted model")
+    with _model_swap_lock:
+        torch_model = model
+        target_layer = last_conv
+
+
+def _load_model_from_disk():
     try:
         model = onnx2torch.convert(onnx.load(MODEL_PATH))
         model.eval()
-        last_conv = None
-        for m in model.modules():
-            if isinstance(m, nn.Conv2d):
-                last_conv = m
-        if last_conv is None:
-            raise RuntimeError("No Conv2d found in converted model")
-        torch_model = model
-        target_layer = last_conv
-        print(f"[INFO] Model loaded. Target layer: {last_conv}")
+        _set_active_model(model)
+        print(f"[INFO] Model loaded from disk: {MODEL_PATH}")
     except Exception as e:
         print(f"[WARNING] Failed to load model from {MODEL_PATH}: {e}")
 
 
-_load_model()
+def _try_reload_from_storage(bucket_path: str) -> bool:
+    """Download an ONNX from the model-uploads bucket and swap it in."""
+    try:
+        from api.model_lifecycle import _storage_download
+
+        data = _storage_download(bucket_path)
+        if data is None:
+            return False
+        model = onnx2torch.convert(onnx.load_from_string(data))
+        model.eval()
+        _set_active_model(model)
+        return True
+    except Exception as e:
+        print(f"[WARNING] Storage reload failed for {bucket_path}: {e}")
+        return False
+
+
+def _maybe_refresh_model() -> None:
+    global _active_version_id, _active_path, _version_last_checked
+    now = time.time()
+    if now - _version_last_checked < _VERSION_TTL_S:
+        return
+    _version_last_checked = now
+    try:
+        from api.metrics import _active_version
+
+        v = _active_version()
+        if not v:
+            return
+        new_id = v.get("id")
+        new_path = v.get("onnx_path")
+        if _active_version_id is None:
+            # First observation — record baseline, do not reload (boot already
+            # loaded from disk via MODEL_PATH).
+            _active_version_id = new_id
+            _active_path = new_path
+            return
+        if new_id != _active_version_id or new_path != _active_path:
+            if new_path and _try_reload_from_storage(new_path):
+                _active_version_id = new_id
+                _active_path = new_path
+                print(f"[INFO] Swapped active model -> {v.get('version')} ({new_path})")
+    except Exception as e:
+        print(f"[WARNING] Active version check failed: {e}")
+
+
+_load_model_from_disk()
 
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -89,6 +152,8 @@ def health():
 
 @app.route("/api/predict", methods=["POST"])
 def predict():
+    _maybe_refresh_model()
+
     if "file" not in request.files:
         return jsonify({"error": "No image file provided"}), 400
 
@@ -132,6 +197,8 @@ def predict():
 
 @app.route("/api/gradcam", methods=["POST"])
 def gradcam():
+    _maybe_refresh_model()
+
     if "file" not in request.files:
         return jsonify({"error": "No image file provided"}), 400
 

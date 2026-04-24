@@ -79,22 +79,43 @@ export function UploadWizard() {
     notes: "Improved recall on MEL and SCC via focal loss tuning.",
   });
   const [benchResult, setBenchResult] = useState<{
-    accuracy: number;
-    f1: number;
+    accuracy: number | null;
+    f1: number | null;
     latency_ms: number;
+    latency_p95_ms?: number;
+    runs?: number;
+    eval_set_available?: boolean;
+    note?: string;
   } | null>(null);
+  const [validateError, setValidateError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    const accessToken = async () => {
+      const supabase = createClient();
+      const { data } = await supabase.auth.getSession();
+      return data.session?.access_token ?? null;
+    };
+
     if (step === 1) {
       setValidating(true);
-      void fetch("/api/model/upload/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: file?.name ?? "" }),
-      })
-        .then((r) => r.json())
-        .catch(() => null)
+      setValidateError(null);
+      (async () => {
+        const token = await accessToken();
+        const res = await fetch("/api/model/upload/validate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ path: uploadedPath }),
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json?.ok) {
+          setValidateError(json?.error ?? "Validation failed");
+        }
+      })()
+        .catch((e) => setValidateError(String(e)))
         .finally(() => setValidating(false));
       return;
     }
@@ -111,16 +132,25 @@ export function UploadWizard() {
           return n;
         });
       }, 120);
-      void fetch("/api/model/upload/benchmark", { method: "POST" })
-        .then((r) => r.json())
-        .then((j) => {
+      (async () => {
+        const token = await accessToken();
+        const res = await fetch("/api/model/upload/benchmark", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ path: uploadedPath }),
+        });
+        const j = await res.json().catch(() => null);
+        if (res.ok && j) {
           setBenchResult(j);
-          setBenchProgress(100);
-        })
-        .catch(() => setBenchProgress(100));
+        }
+        setBenchProgress(100);
+      })().catch(() => setBenchProgress(100));
       return () => clearInterval(t);
     }
-  }, [step, file?.name]);
+  }, [step, uploadedPath]);
 
   const handleFilePick = (f: File | null) => {
     if (!f) return;
@@ -366,12 +396,19 @@ export function UploadWizard() {
                 )}
               </div>
             ))}
-            {!validating && (
+            {!validating && !validateError && (
               <div className="mt-4">
                 <Alert variant="success" title="All checks passed">
                   <span className="text-xs">
                     Model is structurally compatible with production serving.
                   </span>
+                </Alert>
+              </div>
+            )}
+            {!validating && validateError && (
+              <div className="mt-4">
+                <Alert variant="danger" title="Validation failed">
+                  <span className="text-xs">{validateError}</span>
                 </Alert>
               </div>
             )}
@@ -396,38 +433,59 @@ export function UploadWizard() {
               </div>
             </div>
             {benchProgress >= 100 && benchResult && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {[
-                  {
-                    l: "Acc",
-                    v: `${(benchResult.accuracy * 100).toFixed(1)}%`,
-                    d: "held-out",
-                  },
-                  { l: "Macro F1", v: benchResult.f1.toFixed(3), d: "held-out" },
-                  { l: "AUC", v: "0.971", d: "stub" },
-                  {
-                    l: "p50 lat",
-                    v: `${benchResult.latency_ms}ms`,
-                    d: "held-out",
-                  },
-                ].map((s) => (
-                  <div
-                    key={s.l}
-                    className="rounded-md border border-border p-4 text-center"
-                  >
-                    <div className="text-xs text-muted-foreground mono mb-1">
-                      {s.l}
-                    </div>
-                    <div className="text-xl font-semibold mono">{s.v}</div>
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {[
+                    {
+                      l: "Acc",
+                      v:
+                        benchResult.accuracy == null
+                          ? "—"
+                          : `${(benchResult.accuracy * 100).toFixed(1)}%`,
+                      d: benchResult.accuracy == null ? "no eval set" : "held-out",
+                    },
+                    {
+                      l: "Macro F1",
+                      v:
+                        benchResult.f1 == null
+                          ? "—"
+                          : benchResult.f1.toFixed(3),
+                      d: benchResult.f1 == null ? "no eval set" : "held-out",
+                    },
+                    {
+                      l: "p95 lat",
+                      v:
+                        benchResult.latency_p95_ms != null
+                          ? `${benchResult.latency_p95_ms}ms`
+                          : "—",
+                      d: "measured",
+                    },
+                    {
+                      l: "p50 lat",
+                      v: `${benchResult.latency_ms}ms`,
+                      d: `n=${benchResult.runs ?? "?"}`,
+                    },
+                  ].map((s) => (
                     <div
-                      className="text-xs mt-2"
-                      style={{ color: "hsl(var(--success))" }}
+                      key={s.l}
+                      className="rounded-md border border-border p-4 text-center"
                     >
-                      {s.d}
+                      <div className="text-xs text-muted-foreground mono mb-1">
+                        {s.l}
+                      </div>
+                      <div className="text-xl font-semibold mono">{s.v}</div>
+                      <div className="text-xs mt-2 text-muted-foreground">
+                        {s.d}
+                      </div>
                     </div>
+                  ))}
+                </div>
+                {benchResult.note && (
+                  <div className="mt-4 text-xs text-muted-foreground">
+                    {benchResult.note}
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -515,20 +573,31 @@ export function UploadWizard() {
             onClick={async () => {
               const toastId = toast.loading(`Deploying to ${deployChoice}…`);
               try {
+                const supabase = createClient();
+                const { data } = await supabase.auth.getSession();
+                const token = data.session?.access_token ?? null;
                 const res = await fetch("/api/model/deploy", {
                   method: "POST",
-                  headers: { "Content-Type": "application/json" },
+                  headers: {
+                    "Content-Type": "application/json",
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                  },
                   body: JSON.stringify({
+                    path: uploadedPath,
                     version: meta.version,
                     target: deployChoice,
+                    architecture: meta.architecture,
+                    notes: meta.notes,
+                    benchmark: benchResult,
                   }),
                 });
+                const json = await res.json().catch(() => null);
                 toast.dismiss(toastId);
-                if (!res.ok) {
-                  toast.error("Deploy failed");
+                if (!res.ok || !json?.deployed) {
+                  toast.error(json?.error ?? "Deploy failed");
                   return;
                 }
-                toast.success(`${meta.version} queued for ${deployChoice}`);
+                toast.success(`${meta.version} deployed (${json.status})`);
                 router.push("/admin/models");
               } catch {
                 toast.dismiss(toastId);

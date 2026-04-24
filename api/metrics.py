@@ -1,19 +1,19 @@
-"""Metrics + model-lifecycle endpoints.
+"""Metrics read endpoints + telemetry/ingest helpers.
 
 Reads from public.model_versions / public.model_metrics / public.inference_telemetry
 via the Supabase service-role client. Falls back to deterministic synthetic
 values when no metrics are recorded yet (dev env, fresh deploy) so the UI
 never breaks.
 
-Contracts are stable — callers do not change when the real metrics pipeline
-ingests a training artifact.
+Model lifecycle (upload/validate, benchmark, deploy) lives in
+api/model_lifecycle.py. Contracts are stable — callers do not change when the
+real metrics pipeline ingests a training artifact.
 """
-import time
 from typing import Any, Optional
 
 import numpy as np
 import requests
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify
 
 from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, service_headers
 
@@ -281,49 +281,7 @@ def model_versions():
     return jsonify({"versions": out, "synthetic": False})
 
 
-# ---------- Model upload/deploy stubs (P1b will replace) ----------
-
-@metrics_bp.route("/model/upload/validate", methods=["POST"])
-def model_upload_validate():
-    filename = ""
-    if request.files:
-        f = next(iter(request.files.values()))
-        filename = f.filename or ""
-    else:
-        payload = request.get_json(silent=True) or {}
-        filename = payload.get("filename", "")
-    time.sleep(1.4)
-    lower = filename.lower()
-    if not (lower.endswith(".onnx") or lower.endswith(".pt")):
-        return (
-            jsonify({"ok": False, "error": "Only .onnx or .pt accepted"}),
-            400,
-        )
-    return jsonify({"ok": True, "filename": filename, "synthetic": True})
-
-
-@metrics_bp.route("/model/upload/benchmark", methods=["POST"])
-def model_upload_benchmark():
-    time.sleep(3.0)
-    return jsonify(
-        {
-            "accuracy": 0.918,
-            "f1": 0.879,
-            "latency_ms": 174,
-            "synthetic": True,
-        }
-    )
-
-
-@metrics_bp.route("/model/deploy", methods=["POST"])
-def model_deploy():
-    payload = request.get_json(silent=True) or {}
-    version = payload.get("version", "v1.0")
-    time.sleep(1.0)
-    return jsonify({"deployed": True, "version": version, "synthetic": True})
-
-
-# ---------- Helpers for P1b / telemetry path ----------
+# ---------- Helpers for model lifecycle / telemetry ----------
 
 def ingest_metrics(version_id: str, metrics_json: dict) -> bool:
     """Insert metric rows for a given model version.
