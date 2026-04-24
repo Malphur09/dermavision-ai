@@ -5,7 +5,7 @@ import { Download, FileText, Filter, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
-import { ISIC_CLASSES, type RiskBucket } from "@/lib/mock-data";
+import { ISIC_CLASSES, type RiskBucket } from "@/lib/isic-classes";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";

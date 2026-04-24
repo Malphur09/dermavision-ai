@@ -583,7 +583,6 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
                 background: "oklch(0.85 0.15 140)",
               }}
             />
-            {/* MOCK: model stats copy */}
             <span className="text-xs mono tracking-wide">MODEL v1.0</span>
           </div>
           <h2 className="text-4xl font-semibold tracking-tight mb-4 leading-tight">
@@ -592,26 +591,12 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
             dermatologic oncology.
           </h2>
           <p
-            className="text-base opacity-80 leading-relaxed mb-8"
+            className="text-base opacity-80 leading-relaxed"
             style={{ maxWidth: 440 }}
           >
             8-class ISIC classification with explainable Grad-CAM attribution.
             Built for clinicians who need confidence, not just a prediction.
           </p>
-
-          <div className="grid grid-cols-3 gap-4 mt-10">
-            {/* MOCK: hero stats */}
-            {[
-              { label: "Lesions triaged", value: "142,800" },
-              { label: "Partner clinics", value: "38" },
-              { label: "Avg. inference", value: "340ms" },
-            ].map((s) => (
-              <div key={s.label}>
-                <div className="text-2xl font-semibold mono">{s.value}</div>
-                <div className="text-xs opacity-70 mt-1">{s.label}</div>
-              </div>
-            ))}
-          </div>
         </div>
 
         <div className="relative z-10 text-xs opacity-60">
