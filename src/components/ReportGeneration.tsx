@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, Download, FileJson, FileText } from "lucide-react";
 import { toast } from "sonner";
 
@@ -61,7 +61,10 @@ const RISK_COLOR: Record<string, string> = {
 export function ReportGeneration() {
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const paramCaseId = searchParams.get("caseId");
   const [caseData, setCaseData] = useState<CaseSession | null>(null);
+  const [loadingCase, setLoadingCase] = useState(true);
   const [sections, setSections] = useState<Record<SectionKey, boolean>>({
     patientInfo: true,
     diagnosisResults: true,
@@ -73,6 +76,47 @@ export function ReportGeneration() {
   const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
+    const supabase = createClient();
+
+    const loadById = async (id: string) => {
+      const { data, error } = await supabase
+        .from("cases")
+        .select(
+          "id, predicted_class, confidence, risk_level, patients(patient_id, name)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+      if (error || !data) {
+        setLoadingCase(false);
+        return;
+      }
+      const row = data as unknown as {
+        id: string;
+        predicted_class: string | null;
+        confidence: number | null;
+        risk_level: string | null;
+        patients: { patient_id: string | null; name: string | null } | null;
+      };
+      const pid = row.patients?.patient_id ?? undefined;
+      const pname = row.patients?.name ?? undefined;
+      setCaseData({
+        caseId: row.id,
+        patientId: pid,
+        patientName: pname,
+        patientLabel: [pid, pname].filter(Boolean).join(" · "),
+        predictedClass: row.predicted_class ?? "Unknown",
+        confidence:
+          typeof row.confidence === "number" ? row.confidence : null,
+        riskLevel: row.risk_level ?? "Benign",
+      });
+      setLoadingCase(false);
+    };
+
+    if (paramCaseId) {
+      void loadById(paramCaseId);
+      return;
+    }
+
     const raw = sessionStorage.getItem("lastCase");
     if (raw) {
       try {
@@ -81,7 +125,8 @@ export function ReportGeneration() {
         /* ignore */
       }
     }
-  }, []);
+    setLoadingCase(false);
+  }, [paramCaseId]);
 
   const toggle = (k: SectionKey) =>
     setSections((p) => ({ ...p, [k]: !p[k] }));
@@ -164,16 +209,29 @@ export function ReportGeneration() {
         breadcrumb={["Doctor", "Reports"]}
       />
 
-      {!caseData && (
+      {!caseData && !loadingCase && (
         <div className="mb-5">
           <Alert variant="warning" title="No case loaded">
-            <button
-              onClick={() => router.push("/diagnostic")}
-              className="underline font-medium text-foreground"
-            >
-              Run a diagnosis first
-            </button>{" "}
-            to populate the report.
+            {paramCaseId ? (
+              <>Could not load case <span className="mono">{paramCaseId.slice(0, 8)}</span>. It may not exist or you may not have access.</>
+            ) : (
+              <>
+                <button
+                  onClick={() => router.push("/diagnostic")}
+                  className="underline font-medium text-foreground"
+                >
+                  Run a diagnosis first
+                </button>{" "}
+                or pick one from{" "}
+                <button
+                  onClick={() => router.push("/records")}
+                  className="underline font-medium text-foreground"
+                >
+                  Patient Records
+                </button>
+                .
+              </>
+            )}
           </Alert>
         </div>
       )}

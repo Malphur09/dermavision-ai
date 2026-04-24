@@ -443,7 +443,9 @@ export function DiagnosisResults() {
             </Button>
             <Button
               variant="outline"
-              onClick={() => router.push("/report")}
+              onClick={() =>
+                router.push(`/report?caseId=${caseData.caseId}`)
+              }
               title="Generate report"
             >
               <Download size={14} /> Export PDF
