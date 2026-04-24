@@ -1,13 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  Download,
-  Eye,
-  FileJson,
-  FileText,
-} from "lucide-react";
+import { AlertTriangle, Download, FileJson, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
@@ -94,15 +88,6 @@ export function ReportGeneration() {
 
   const hasAnySection = Object.values(sections).some(Boolean);
 
-  const handlePreview = () => {
-    if (!hasAnySection) {
-      toast.error("Select at least one section");
-      return;
-    }
-    // MOCK: preview
-    toast.info("Preview coming soon");
-  };
-
   const handleExport = async () => {
     if (!hasAnySection) {
       toast.error("Select at least one section");
@@ -116,26 +101,47 @@ export function ReportGeneration() {
     const toastId = toast.loading(
       `Generating ${format.toUpperCase()} report…`
     );
-    const supabase = createClient();
-    const { error } = await supabase.from("reports").insert({
-      case_id: caseData.caseId,
-      doctor_id: user.id,
-      sections,
-      format,
-    });
-    toast.dismiss(toastId);
-    if (error) {
-      toast.error("Failed to save report");
-    } else {
-      toast.success(`Report saved as ${format.toUpperCase()}`);
+    try {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) throw new Error("No active session");
+      const resp = await fetch("/api/reports/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          case_id: caseData.caseId,
+          sections,
+          format,
+        }),
+      });
+      toast.dismiss(toastId);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        toast.error(err.error || "Failed to generate report");
+        return;
+      }
+      const data: { signed_url: string; format: string } = await resp.json();
+      toast.success(`Report ready — ${data.format.toUpperCase()}`);
+      window.open(data.signed_url, "_blank", "noopener,noreferrer");
       void logPhiAccess({
         resource_type: "case",
         resource_id: caseData.caseId,
         action: "exported",
         metadata: { format, sections },
       });
+    } catch (e) {
+      toast.dismiss(toastId);
+      toast.error(
+        e instanceof Error ? e.message : "Failed to generate report"
+      );
+    } finally {
+      setIsGenerating(false);
     }
-    setIsGenerating(false);
   };
 
   const patientLabel =
@@ -315,9 +321,6 @@ export function ReportGeneration() {
             </Alert>
 
             <div className="mt-5 flex gap-3 flex-wrap">
-              <Button variant="outline" onClick={handlePreview}>
-                <Eye size={14} /> Preview
-              </Button>
               <Button
                 variant="brand"
                 onClick={handleExport}
@@ -326,12 +329,12 @@ export function ReportGeneration() {
               >
                 <Download size={14} />
                 {isGenerating
-                  ? "Saving…"
+                  ? "Generating…"
                   : `Generate ${format.toUpperCase()}`}
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground mt-3">
-              Preview only — server-side PDF export coming in a later release.
+              File opens in a new tab. Download link expires after 1 hour.
             </p>
           </div>
         </div>

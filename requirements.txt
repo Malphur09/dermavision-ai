@@ -10,3 +10,4 @@ torch>=2.2,<3
 grad-cam>=1.5,<2
 supabase>=2.4,<3
 requests
+weasyprint>=62,<65
