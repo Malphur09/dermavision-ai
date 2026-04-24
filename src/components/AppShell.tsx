@@ -1,6 +1,8 @@
 "use client";
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+
+import { createClient } from "@/lib/supabase/client";
 import {
   Bell,
   ChevronDown,
@@ -55,11 +57,56 @@ export function AppShell({
   const { user, role, signOut } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [shellSearch, setShellSearch] = useState("");
+  type Suggestion = { id: string; patient_id: string; name: string };
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const searchWrapRef = useRef<HTMLDivElement>(null);
+
+  const patientTarget = role === "admin" ? "/admin/patients" : "/records";
 
   const submitShellSearch = () => {
     const q = shellSearch.trim();
-    const target = role === "admin" ? "/admin/patients" : "/records";
-    router.push(q ? `${target}?q=${encodeURIComponent(q)}` : target);
+    setSuggestOpen(false);
+    router.push(q ? `${patientTarget}?q=${encodeURIComponent(q)}` : patientTarget);
+  };
+
+  useEffect(() => {
+    const q = shellSearch.trim();
+    if (q.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    const supabase = createClient();
+    const handle = setTimeout(async () => {
+      const escaped = q.replace(/[%_,]/g, "\\$&");
+      const { data } = await supabase
+        .from("patients")
+        .select("id, patient_id, name")
+        .or(`name.ilike.%${escaped}%,patient_id.ilike.%${escaped}%`)
+        .order("created_at", { ascending: false })
+        .limit(6);
+      setSuggestions((data ?? []) as Suggestion[]);
+    }, 180);
+    return () => clearTimeout(handle);
+  }, [shellSearch]);
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (
+        searchWrapRef.current &&
+        !searchWrapRef.current.contains(e.target as Node)
+      ) {
+        setSuggestOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onClickOutside);
+    return () => window.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const pickSuggestion = (s: Suggestion) => {
+    setSuggestOpen(false);
+    setShellSearch("");
+    router.push(`${patientTarget}?q=${encodeURIComponent(s.patient_id)}`);
   };
 
   const displayName =
@@ -202,7 +249,10 @@ export function AppShell({
             >
               <Menu size={16} />
             </Button>
-            <div className="relative w-full max-w-[380px]">
+            <div
+              className="relative w-full max-w-[380px]"
+              ref={searchWrapRef}
+            >
               <Search
                 size={14}
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -211,11 +261,17 @@ export function AppShell({
                 placeholder="Search patients by name or ID…"
                 className="h-9 pl-9 pr-12"
                 value={shellSearch}
-                onChange={(e) => setShellSearch(e.target.value)}
+                onChange={(e) => {
+                  setShellSearch(e.target.value);
+                  setSuggestOpen(true);
+                }}
+                onFocus={() => setSuggestOpen(true)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
                     submitShellSearch();
+                  } else if (e.key === "Escape") {
+                    setSuggestOpen(false);
                   }
                 }}
                 aria-label="Search patients"
@@ -229,6 +285,49 @@ export function AppShell({
               >
                 <Kbd>↵</Kbd>
               </button>
+              {suggestOpen &&
+                shellSearch.trim().length >= 2 &&
+                suggestions.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 rounded-md border border-border bg-popover shadow-card-md overflow-hidden z-50">
+                    <ul className="max-h-72 overflow-y-auto">
+                      {suggestions.map((s) => (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => pickSuggestion(s)}
+                            className="w-full text-left px-3 py-2 hover:bg-muted/60 flex items-center justify-between gap-3"
+                          >
+                            <span className="text-sm font-medium truncate">
+                              {s.name}
+                            </span>
+                            <span className="text-xs mono text-muted-foreground shrink-0">
+                              {s.patient_id}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      onClick={submitShellSearch}
+                      className="w-full text-left px-3 py-2 border-t border-border text-xs text-muted-foreground hover:bg-muted/60"
+                    >
+                      View all results for{" "}
+                      <span className="font-medium text-foreground">
+                        {shellSearch.trim()}
+                      </span>
+                    </button>
+                  </div>
+                )}
+              {suggestOpen &&
+                shellSearch.trim().length >= 2 &&
+                suggestions.length === 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 rounded-md border border-border bg-popover shadow-card-md px-3 py-2 text-xs text-muted-foreground z-50">
+                    No patients match{" "}
+                    <span className="mono">{shellSearch.trim()}</span>
+                  </div>
+                )}
             </div>
           </div>
 
