@@ -244,9 +244,11 @@ export function Settings() {
             <Shield size={14} /> Security
           </TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
-          <TabsTrigger value="clinic">
-            <Building2 size={14} /> Clinic
-          </TabsTrigger>
+          {role === "admin" && (
+            <TabsTrigger value="clinic">
+              <Building2 size={14} /> Clinic
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="profile" className="mt-5">
@@ -536,6 +538,7 @@ export function Settings() {
           </div>
         </TabsContent>
 
+        {role === "admin" && (
         <TabsContent value="clinic" className="mt-5">
           <div className="rounded-lg border border-border bg-card p-6 flex flex-col gap-4">
             <div>
@@ -587,6 +590,7 @@ export function Settings() {
             </div>
           </div>
         </TabsContent>
+        )}
       </Tabs>
     </div>
   );
