@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   ChevronLeft,
@@ -62,9 +62,11 @@ const RISK_BADGE: Record<
 
 export function PatientRecords() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get("q") ?? "";
   const [records, setRecords] = useState<PatientRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialQuery);
   const [riskFilter, setRiskFilter] = useState<RiskFilter>("all");
   const [page, setPage] = useState(1);
 
@@ -136,6 +138,62 @@ export function PatientRecords() {
 
   const highRiskCount = records.filter((r) => r.risk === "High Risk").length;
 
+  const exportCsv = () => {
+    if (filtered.length === 0) {
+      toast.error("Nothing to export");
+      return;
+    }
+    const headers = [
+      "Patient ID",
+      "Name",
+      "Age",
+      "Sex",
+      "Last diagnosis",
+      "Prediction",
+      "Confidence",
+      "Risk",
+      "Scans",
+    ];
+    const escape = (v: string | number | null | undefined) => {
+      if (v === null || v === undefined) return "";
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [headers.join(",")];
+    filtered.forEach((r) => {
+      lines.push(
+        [
+          r.patientId,
+          r.name,
+          r.age,
+          r.sex,
+          r.lastDiagnosis
+            ? new Date(r.lastDiagnosis).toISOString().slice(0, 10)
+            : "",
+          r.prediction,
+          r.confidence != null ? r.confidence.toFixed(1) : "",
+          r.risk,
+          r.scans,
+        ]
+          .map(escape)
+          .join(",")
+      );
+    });
+    const blob = new Blob([lines.join("\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `patients-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported ${filtered.length} patient(s)`);
+  };
+
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <PageHeader
@@ -144,9 +202,12 @@ export function PatientRecords() {
         breadcrumb={["Doctor", "Patients"]}
         actions={
           <>
-            {/* MOCK: export action */}
-            <Button variant="outline">
-              <Download size={14} /> Export
+            <Button
+              variant="outline"
+              onClick={exportCsv}
+              title="Export filtered list as CSV"
+            >
+              <Download size={14} /> Export CSV
             </Button>
             <Button
               variant="brand"

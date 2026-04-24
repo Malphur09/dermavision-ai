@@ -54,6 +54,13 @@ export function AppShell({
   const { theme, toggleTheme } = useTheme();
   const { user, role, signOut } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [shellSearch, setShellSearch] = useState("");
+
+  const submitShellSearch = () => {
+    const q = shellSearch.trim();
+    const target = role === "admin" ? "/admin/patients" : "/records";
+    router.push(q ? `${target}?q=${encodeURIComponent(q)}` : target);
+  };
 
   const displayName =
     (user?.user_metadata?.full_name as string | undefined) ||
@@ -201,12 +208,27 @@ export function AppShell({
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
               />
               <Input
-                placeholder="Search patients, scans, models…"
+                placeholder="Search patients by name or ID…"
                 className="h-9 pl-9 pr-12"
+                value={shellSearch}
+                onChange={(e) => setShellSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    submitShellSearch();
+                  }
+                }}
+                aria-label="Search patients"
               />
-              <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden sm:block">
-                <Kbd>⌘K</Kbd>
-              </div>
+              <button
+                type="button"
+                onClick={submitShellSearch}
+                className="absolute right-2 top-1/2 -translate-y-1/2 hidden sm:block text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Submit search"
+                title="Search"
+              >
+                <Kbd>↵</Kbd>
+              </button>
             </div>
           </div>
 

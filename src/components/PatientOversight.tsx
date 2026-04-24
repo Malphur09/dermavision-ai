@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Download, FileText, Filter, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -53,7 +54,8 @@ interface Kpis {
 }
 
 export function PatientOversight() {
-  const [search, setSearch] = useState("");
+  const searchParams = useSearchParams();
+  const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const [rows, setRows] = useState<PatientRow[]>([]);
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [loading, setLoading] = useState(true);
