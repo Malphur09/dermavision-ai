@@ -139,14 +139,30 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
         toast.success("Account created. Welcome!");
         onLogin();
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+        const { data: signInData, error } =
+          await supabase.auth.signInWithPassword({
+            email,
+            password,
+          });
         if (error) {
           toast.error("Invalid email or password");
           setErrors({ email: " ", password: "Invalid email or password" });
           return;
+        }
+        const userId = signInData.user?.id;
+        if (userId) {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("suspended")
+            .eq("id", userId)
+            .maybeSingle();
+          if (profile?.suspended) {
+            await supabase.auth.signOut();
+            toast.error(
+              "Access not yet active. An administrator must approve your account."
+            );
+            return;
+          }
         }
         toast.success("Welcome back!");
         onLogin();
