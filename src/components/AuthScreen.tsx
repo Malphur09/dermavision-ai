@@ -33,7 +33,7 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
   const [lastName, setLastName] = useState("");
   const [license, setLicense] = useState("");
   const [showPw, setShowPw] = useState(false);
-  const [remember, setRemember] = useState(true);
+  const [remember, setRemember] = useState(false);
   const [errors, setErrors] = useState<{
     email?: string;
     password?: string;
