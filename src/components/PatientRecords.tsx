@@ -92,7 +92,7 @@ export function PatientRecords() {
   const [addPatientId, setAddPatientId] = useState("");
   const [addName, setAddName] = useState("");
   const [addAge, setAddAge] = useState("");
-  const [addSex, setAddSex] = useState<"male" | "female" | "other" | "">("");
+  const [addSex, setAddSex] = useState<"male" | "female" | "">("");
   const [addErrors, setAddErrors] = useState<Record<string, string>>({});
 
   const loadRecords = async () => {
@@ -588,7 +588,7 @@ export function PatientRecords() {
                 </Label>
                 <Select
                   value={addSex}
-                  onValueChange={(v: "male" | "female" | "other") => {
+                  onValueChange={(v: "male" | "female") => {
                     setAddSex(v);
                     setAddErrors((p) => {
                       const n = { ...p };
@@ -607,7 +607,6 @@ export function PatientRecords() {
                   <SelectContent>
                     <SelectItem value="male">Male</SelectItem>
                     <SelectItem value="female">Female</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
                   </SelectContent>
                 </Select>
                 {addErrors.sex && (

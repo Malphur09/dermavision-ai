@@ -239,8 +239,8 @@ export function DoctorDashboard() {
     },
     {
       label: "Model confidence",
-      value: "91.3%",
-      delta: "v3.2.1 live",
+      value: "—",
+      delta: "",
       icon: Brain,
       warn: false,
       mock: true,
