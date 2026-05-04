@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CartesianGrid,
   Line,
@@ -10,9 +11,10 @@ import {
   YAxis,
 } from "recharts";
 import { CheckCircle2, Download, TrendingUp, Upload } from "lucide-react";
+import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
-import { ISIC_CLASSES } from "@/lib/mock-data";
+import { ISIC_CLASSES } from "@/lib/isic-classes";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Button } from "@/components/ui/button";
 import {
@@ -64,8 +66,10 @@ function toSeries(values: number[]): Series {
 }
 
 export function AdminDashboard() {
+  const router = useRouter();
   const [scansToday, setScansToday] = useState<number | null>(null);
   const [range, setRange] = useState<"24h" | "7d" | "30d" | "all">("7d");
+  const [exporting, setExporting] = useState(false);
   const [summary, setSummary] = useState<MetricsSummary | null>(null);
   const [perClass, setPerClass] = useState<PerClass[]>([]);
   const [curves, setCurves] = useState<TrainingCurves | null>(null);
@@ -158,6 +162,67 @@ export function AdminDashboard() {
     },
   ];
 
+  const rangeSince = (): string | null => {
+    if (range === "all") return null;
+    const d = new Date();
+    const hours = range === "24h" ? 24 : range === "7d" ? 24 * 7 : 24 * 30;
+    d.setHours(d.getHours() - hours);
+    return d.toISOString();
+  };
+
+  const csvEscape = (v: unknown) => {
+    const s = v == null ? "" : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const supabase = createClient();
+      let q = supabase
+        .from("cases")
+        .select(
+          "id,created_at,predicted_class,confidence,risk_level,status,lesion_site"
+        )
+        .order("created_at", { ascending: false });
+      const since = rangeSince();
+      if (since) q = q.gte("created_at", since);
+      const { data, error } = await q;
+      if (error) {
+        toast.error(error.message || "Export failed");
+        return;
+      }
+      const rows = data ?? [];
+      const header = [
+        "id",
+        "created_at",
+        "predicted_class",
+        "confidence",
+        "risk_level",
+        "status",
+        "lesion_site",
+      ];
+      const csv = [
+        header.join(","),
+        ...rows.map((r) =>
+          header.map((k) => csvEscape((r as Record<string, unknown>)[k])).join(",")
+        ),
+      ].join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `cases-${range}-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${rows.length} case${rows.length === 1 ? "" : "s"}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <PageHeader
@@ -177,11 +242,10 @@ export function AdminDashboard() {
                 <SelectItem value="all">All time</SelectItem>
               </SelectContent>
             </Select>
-            {/* MOCK: export action */}
-            <Button variant="outline">
-              <Download size={14} /> Export
+            <Button variant="outline" onClick={handleExport} disabled={exporting}>
+              <Download size={14} /> {exporting ? "Exporting…" : "Export"}
             </Button>
-            <Button variant="brand">
+            <Button variant="brand" onClick={() => router.push("/admin/publish")}>
               <Upload size={14} /> New model version
             </Button>
           </>

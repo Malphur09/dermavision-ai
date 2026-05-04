@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MoreHorizontal, Upload } from "lucide-react";
 
-import { ISIC_CLASSES } from "@/lib/mock-data";
+import { ISIC_CLASSES } from "@/lib/isic-classes";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Button } from "@/components/ui/button";
 import {
