@@ -1,12 +1,19 @@
 "use client";
 import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface AuditRow {
@@ -38,6 +45,8 @@ export function AdminAuditLog() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [actionFilter, setActionFilter] = useState<string>("all");
+  const [exportRange, setExportRange] = useState<"7d" | "30d" | "90d" | "all">("30d");
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -106,6 +115,63 @@ export function AdminAuditLog() {
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
+  const csvEscape = (v: unknown) => {
+    const s = v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const supabase = createClient();
+      const now = new Date();
+      const from = new Date(now);
+      if (exportRange === "7d") from.setDate(from.getDate() - 7);
+      else if (exportRange === "30d") from.setDate(from.getDate() - 30);
+      else if (exportRange === "90d") from.setDate(from.getDate() - 90);
+      else from.setFullYear(from.getFullYear() - 5);
+
+      const { data, error } = await supabase.rpc("admin_export_audit_logs", {
+        from_ts: from.toISOString(),
+        to_ts: now.toISOString(),
+      });
+      if (error) {
+        toast.error(error.message || "Export failed");
+        return;
+      }
+      const list = (data ?? []) as AuditRow[];
+      const header = [
+        "id",
+        "created_at",
+        "user_id",
+        "action",
+        "resource_type",
+        "resource_id",
+        "metadata",
+      ];
+      const csv = [
+        header.join(","),
+        ...list.map((r) =>
+          header
+            .map((k) => csvEscape((r as unknown as Record<string, unknown>)[k]))
+            .join(",")
+        ),
+      ].join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-${exportRange}-${now.toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${list.length} event${list.length === 1 ? "" : "s"}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="p-8 max-w-7xl mx-auto">
       <PageHeader
@@ -142,6 +208,25 @@ export function AdminAuditLog() {
               <TabsTrigger value="exported">Exported</TabsTrigger>
             </TabsList>
           </Tabs>
+          <div className="flex items-center gap-2 ml-auto">
+            <Select
+              value={exportRange}
+              onValueChange={(v) => setExportRange(v as typeof exportRange)}
+            >
+              <SelectTrigger className="h-9 w-[120px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7d">Last 7d</SelectItem>
+                <SelectItem value="30d">Last 30d</SelectItem>
+                <SelectItem value="90d">Last 90d</SelectItem>
+                <SelectItem value="all">All</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" onClick={handleExport} disabled={exporting}>
+              <Download size={14} /> {exporting ? "Exporting…" : "Export CSV"}
+            </Button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">

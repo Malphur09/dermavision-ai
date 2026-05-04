@@ -46,6 +46,7 @@ interface Stats {
   activePatients: number | null;
   pendingReview: number | null;
   pendingUrgent: number | null;
+  avgConfidence: number | null;
 }
 
 interface RecentRow {
@@ -87,6 +88,7 @@ export function DoctorDashboard() {
     activePatients: null,
     pendingReview: null,
     pendingUrgent: null,
+    avgConfidence: null,
   });
   const [recent, setRecent] = useState<RecentRow[] | null>(null);
   const [urgent, setUrgent] = useState<UrgentRow[] | null>(null);
@@ -98,6 +100,9 @@ export function DoctorDashboard() {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
+      const since30d = new Date();
+      since30d.setDate(since30d.getDate() - 30);
+
       const [
         todayRes,
         patientsRes,
@@ -105,6 +110,7 @@ export function DoctorDashboard() {
         pendingUrgentRes,
         recentRes,
         urgentRes,
+        confRes,
       ] = await Promise.all([
         supabase
           .from("cases")
@@ -140,13 +146,28 @@ export function DoctorDashboard() {
           .eq("risk_level", "High Risk")
           .order("created_at", { ascending: false })
           .limit(3),
+        supabase
+          .from("cases")
+          .select("confidence")
+          .eq("doctor_id", user.id)
+          .gte("created_at", since30d.toISOString())
+          .not("confidence", "is", null),
       ]);
+
+      const confValues = ((confRes.data ?? []) as { confidence: number | null }[])
+        .map((r) => Number(r.confidence))
+        .filter((v) => Number.isFinite(v));
+      const avgConfidence =
+        confValues.length === 0
+          ? null
+          : confValues.reduce((a, b) => a + b, 0) / confValues.length;
 
       setStats({
         scansToday: todayRes.count ?? 0,
         activePatients: patientsRes.count ?? 0,
         pendingReview: pendingRes.count ?? 0,
         pendingUrgent: pendingUrgentRes.count ?? 0,
+        avgConfidence,
       });
 
       type CaseJoin = {
@@ -216,7 +237,6 @@ export function DoctorDashboard() {
       delta: "live",
       icon: ImageIcon,
       warn: false,
-      mock: false,
     },
     {
       label: "Pending review",
@@ -227,7 +247,6 @@ export function DoctorDashboard() {
           : `${stats.pendingUrgent} urgent`,
       icon: Clock,
       warn: (stats.pendingUrgent ?? 0) > 0,
-      mock: false,
     },
     {
       label: "Active patients",
@@ -235,15 +254,16 @@ export function DoctorDashboard() {
       delta: "live",
       icon: Users,
       warn: false,
-      mock: false,
     },
     {
       label: "Model confidence",
-      value: "—",
-      delta: "",
+      value:
+        stats.avgConfidence == null
+          ? "—"
+          : `${(stats.avgConfidence * 100).toFixed(1)}%`,
+      delta: stats.avgConfidence == null ? "no scans yet" : "30-day avg",
       icon: Brain,
       warn: false,
-      mock: false,
     },
   ];
 
@@ -273,11 +293,6 @@ export function DoctorDashboard() {
               key={c.label}
               className="rounded-lg border border-border bg-card p-5 relative"
             >
-              {c.mock && (
-                <span className="absolute top-3 right-3 text-[10px] uppercase tracking-wide mono rounded px-1.5 py-0.5 border border-border text-muted-foreground">
-                  mock
-                </span>
-              )}
               <div className="flex items-center justify-between mb-3">
                 <div
                   className="p-2 rounded-md"
