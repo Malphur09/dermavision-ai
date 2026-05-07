@@ -4,6 +4,11 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
+import os
+import tempfile
+
+from PIL import Image
+
 from api import eval_set
 
 
@@ -22,6 +27,52 @@ def test_per_class_prf_diagonal_perfect():
         assert r["recall"] == 1.0
         assert r["f1"] == 1.0
         assert r["support"] == 10
+
+
+def test_parse_isic_ground_truth_drops_unk_rows():
+    raw = (
+        b"image,MEL,NV,BCC,AK,BKL,DF,VASC,SCC,UNK\n"
+        b"ISIC_0000001,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0\n"  # NV
+        b"ISIC_0000002,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0\n"  # MEL
+        b"ISIC_0000003,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0\n"  # UNK -> dropped
+        b"ISIC_0000004,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,0.0\n"  # SCC
+    )
+    rows = eval_set._parse_isic_ground_truth(raw)
+    assert len(rows) == 3
+    assert rows[0] == ("ISIC_0000001", 1)  # NV
+    assert rows[1] == ("ISIC_0000002", 0)  # MEL
+    assert rows[2] == ("ISIC_0000004", 7)  # SCC
+
+
+def test_detect_and_parse_picks_isic_format():
+    isic_raw = b"image,MEL,NV,BCC,AK,BKL,DF,VASC,SCC,UNK\nISIC_x,1.0,0,0,0,0,0,0,0,0\n"
+    simple_raw = b"filename,label\nfoo.jpg,Melanoma\n"
+    assert eval_set._detect_and_parse(isic_raw)[0][0] == "ISIC_x"
+    assert eval_set._detect_and_parse(simple_raw)[0][0] == "foo.jpg"
+
+
+def test_iter_local_batches_resolves_isic_layout():
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "images"))
+        # ISIC filenames have no extension; loader must probe .jpg.
+        Image.new("RGB", (16, 16), color=(0, 0, 0)).save(
+            os.path.join(tmp, "images", "ISIC_0000001.jpg"), "JPEG"
+        )
+        Image.new("RGB", (16, 16), color=(255, 255, 255)).save(
+            os.path.join(tmp, "images", "ISIC_0000002.jpg"), "JPEG"
+        )
+        # Use ISIC's published filename verbatim.
+        with open(os.path.join(tmp, "ISIC_2019_Training_GroundTruth.csv"), "wb") as f:
+            f.write(
+                b"image,MEL,NV,BCC,AK,BKL,DF,VASC,SCC,UNK\n"
+                b"ISIC_0000001,0.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0\n"
+                b"ISIC_0000002,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0\n"
+            )
+        batches = list(eval_set.iter_local_batches(tmp, batch_size=8))
+        assert len(batches) == 1
+        x, y = batches[0]
+        assert x.shape[0] == 2
+        assert list(y) == [1, 0]
 
 
 def test_evaluate_end_to_end_with_stub_model():

@@ -117,16 +117,25 @@ def iter_eval_batches(batch_size: int = 8) -> Iterator[tuple[torch.Tensor, np.nd
     )
 
 
-def iter_local_batches(local_dir: str, batch_size: int = 8) -> Iterator[tuple[torch.Tensor, np.ndarray]]:
-    """Filesystem-backed batches. Same layout as bucket: labels.csv + images/<file>."""
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG")
+
+
+def _resolve_filename(images_dir: str, fname: str) -> Optional[str]:
+    """Return absolute path. If fname has no extension, probe common image suffixes."""
     import os
 
-    labels_path = os.path.join(local_dir, "labels.csv")
-    images_dir = os.path.join(local_dir, "images")
-    if not os.path.isfile(labels_path) or not os.path.isdir(images_dir):
-        return
-    with open(labels_path, "rb") as f:
-        raw = f.read()
+    if os.path.isfile(os.path.join(images_dir, fname)):
+        return os.path.join(images_dir, fname)
+    if "." not in os.path.basename(fname):
+        for ext in _IMAGE_EXTS:
+            cand = os.path.join(images_dir, fname + ext)
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def _parse_simple_labels_csv(raw: bytes) -> list[tuple[str, int]]:
+    """Format: header row `filename,label`."""
     rows: list[tuple[str, int]] = []
     reader = csv.DictReader(io.StringIO(raw.decode("utf-8")))
     for row in reader:
@@ -135,14 +144,94 @@ def iter_local_batches(local_dir: str, batch_size: int = 8) -> Iterator[tuple[to
         if not fname or label not in _LABEL_TO_IDX:
             continue
         rows.append((fname, _LABEL_TO_IDX[label]))
+    return rows
+
+
+def _parse_isic_ground_truth(raw: bytes) -> list[tuple[str, int]]:
+    """ISIC 2019 format: `image,MEL,NV,BCC,AK,BKL,DF,VASC,SCC,UNK` (one-hot per row).
+
+    Maps the active column back to the model class index. UNK rows are dropped
+    — the production model only emits 8 classes.
+    """
+    rows: list[tuple[str, int]] = []
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8")))
+    if not reader.fieldnames:
+        return rows
+    image_col = reader.fieldnames[0]  # ISIC uses "image" but tolerate aliases
+    for row in reader:
+        fname = (row.get(image_col) or "").strip()
+        if not fname:
+            continue
+        active: Optional[str] = None
+        for code in _LABEL_TO_IDX:
+            v = row.get(code)
+            if v is None:
+                continue
+            try:
+                if float(v) >= 0.5:
+                    active = code
+                    break
+            except ValueError:
+                continue
+        if active is None:
+            continue  # UNK row or malformed
+        rows.append((fname, _LABEL_TO_IDX[active]))
+    return rows
+
+
+def _detect_and_parse(raw: bytes) -> list[tuple[str, int]]:
+    """Try ISIC ground-truth shape first; fall back to filename,label."""
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8")))
+    fields = set(reader.fieldnames or [])
+    isic_codes = {"MEL", "NV", "BCC", "AK", "BKL", "DF", "VASC", "SCC"}
+    if isic_codes.issubset(fields):
+        return _parse_isic_ground_truth(raw)
+    return _parse_simple_labels_csv(raw)
+
+
+def iter_local_batches(local_dir: str, batch_size: int = 8) -> Iterator[tuple[torch.Tensor, np.ndarray]]:
+    """Filesystem-backed batches.
+
+    Accepts either layout:
+        local_dir/labels.csv             # filename,label
+        local_dir/ISIC_2019_GroundTruth.csv  # ISIC 2019 one-hot
+        local_dir/images/<file>          # or any *.csv at the top level
+
+    Falls back to globbing for the first .csv at the top level so users
+    do not have to rename ISIC's published file.
+    """
+    import glob
+    import os
+
+    images_dir = os.path.join(local_dir, "images")
+    if not os.path.isdir(images_dir):
+        return
+
+    candidate_paths = [
+        os.path.join(local_dir, "labels.csv"),
+        os.path.join(local_dir, "ISIC_2019_Training_GroundTruth.csv"),
+        os.path.join(local_dir, "ground_truth.csv"),
+        os.path.join(local_dir, "GroundTruth.csv"),
+    ]
+    csv_path = next((p for p in candidate_paths if os.path.isfile(p)), None)
+    if csv_path is None:
+        # Last resort: any .csv at the top level.
+        hits = sorted(glob.glob(os.path.join(local_dir, "*.csv")))
+        csv_path = hits[0] if hits else None
+    if csv_path is None:
+        return
+
+    with open(csv_path, "rb") as f:
+        raw = f.read()
+    rows = _detect_and_parse(raw)
     if not rows:
         return
 
     def _load(fname: str) -> Optional[bytes]:
-        p = os.path.join(images_dir, fname)
-        if not os.path.isfile(p):
+        path = _resolve_filename(images_dir, fname)
+        if path is None:
             return None
-        with open(p, "rb") as f:
+        with open(path, "rb") as f:
             return f.read()
 
     yield from _batches_from_rows(rows, load_image=_load, batch_size=batch_size)

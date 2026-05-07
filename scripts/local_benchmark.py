@@ -15,10 +15,18 @@ Usage:
         --base-url http://localhost:5328 \\
         --token "$(./scripts/print_admin_jwt.sh)"
 
-Layout of `./eval_set`:
+Layout of `./eval_set` (either form is auto-detected):
+
     eval_set/
-      labels.csv          # filename,label  (label = ISIC code or full name)
-      images/<filename>   # one image per row in labels.csv
+      labels.csv                          # filename,label  (label = ISIC code or full name)
+      images/<filename>
+
+    eval_set/
+      ISIC_2019_Training_GroundTruth.csv  # ISIC's one-hot file, used verbatim
+      images/<ISIC_*>.jpg                 # filenames without extension are probed (.jpg/.jpeg/.png)
+
+The `UNK` column in the ISIC ground truth is dropped — the production model only
+emits 8 classes (MEL, NV, BCC, AK, BKL, DF, VASC, SCC).
 
 The benchmark JSON has the same shape that /api/model/upload/benchmark
 returns, so it can be passed verbatim as the `benchmark` field of a
