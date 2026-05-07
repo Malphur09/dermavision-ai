@@ -233,6 +233,10 @@ def metrics_confusion():
 def metrics_drift():
     version = _active_version()
     if version:
+        from api.drift import compute_drift_window
+        live = compute_drift_window(version["id"])
+        if live:
+            return jsonify({**live, "synthetic": False})
         stored = _get_metric(version["id"], "drift")
         if stored and isinstance(stored, dict):
             return jsonify({**stored, "synthetic": False})

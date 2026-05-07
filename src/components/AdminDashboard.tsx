@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { CheckCircle2, Download, TrendingUp, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Eye, TrendingUp, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
@@ -129,6 +129,14 @@ export function AdminDashboard() {
     () => (drift ? toSeries(drift.values) : []),
     [drift]
   );
+  const driftCurrent = drift && drift.values.length > 0 ? drift.values[drift.values.length - 1] : null;
+  const drift7dAvg = useMemo<number | null>(() => {
+    if (!drift || drift.values.length === 0) return null;
+    const tail = drift.values.slice(-7);
+    return tail.reduce((a, b) => a + b, 0) / tail.length;
+  }, [drift]);
+  const driftBand: "stable" | "monitor" | "alert" =
+    drift7dAvg === null ? "stable" : drift7dAvg < 0.1 ? "stable" : drift7dAvg < 0.25 ? "monitor" : "alert";
 
   const classColor = (code: string) =>
     ISIC_CLASSES.find((c) => c.code === code)?.color ?? "hsl(var(--brand))";
@@ -529,18 +537,31 @@ export function AdminDashboard() {
               <h3 className="font-semibold">Drift monitor</h3>
               <Badge
                 variant="outline"
-                className="gap-1 border-success/40 text-success"
+                className={
+                  driftBand === "alert"
+                    ? "gap-1 border-destructive/40 text-destructive"
+                    : driftBand === "monitor"
+                      ? "gap-1 border-warning/40 text-warning"
+                      : "gap-1 border-success/40 text-success"
+                }
               >
-                <CheckCircle2 size={10} /> Stable
+                {driftBand === "alert" ? (
+                  <AlertTriangle size={10} />
+                ) : driftBand === "monitor" ? (
+                  <Eye size={10} />
+                ) : (
+                  <CheckCircle2 size={10} />
+                )}
+                {driftBand === "alert" ? "Alert" : driftBand === "monitor" ? "Monitor" : "Stable"}
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground mb-3">
-              Feature distribution divergence (PSI) vs training set
+              Predicted-class distribution divergence (PSI) vs eval-set reference
             </p>
             <div className="h-[100px]">
               <ResponsiveContainer>
                 <LineChart data={driftCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                  <YAxis domain={[0, 0.25]} hide />
+                  <YAxis domain={[0, 0.5]} hide />
                   <XAxis dataKey="x" hide />
                   <Line
                     type="monotone"
@@ -554,10 +575,10 @@ export function AdminDashboard() {
             </div>
             <div className="flex items-center justify-between mt-2 text-xs">
               <span className="mono text-muted-foreground">
-                Current PSI: 0.11
+                Current PSI: {driftCurrent !== null ? driftCurrent.toFixed(3) : "—"}
               </span>
               <span className="mono text-muted-foreground">
-                Threshold: 0.20
+                7d avg: {drift7dAvg !== null ? drift7dAvg.toFixed(3) : "—"}
               </span>
             </div>
           </div>
