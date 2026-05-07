@@ -13,7 +13,7 @@ from __future__ import annotations
 import base64
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -136,7 +136,7 @@ def _build_html(case: dict, user: dict, user_details: dict | None, sections: dic
     doctor_name = (user_details or {}).get("full_name") or user.get("email", "—")
     clinic = (user_details or {}).get("clinic_name") or ""
     license_no = (user_details or {}).get("license") or ""
-    generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     risk_color = {
         "High Risk": "#dc2626",
@@ -305,7 +305,7 @@ def _render_pdf(html: str) -> bytes:
 
 def _render_json(case: dict, user: dict, sections: dict) -> bytes:
     payload: dict[str, Any] = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "doctor": {"id": user.get("id"), "email": user.get("email")},
         "sections": sections,
         "case": case,

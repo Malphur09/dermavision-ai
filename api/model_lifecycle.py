@@ -357,6 +357,10 @@ def deploy():
         if isinstance(bench.get("confusion"), dict):
             payload["confusion"] = bench["confusion"]
         ingest_metrics(new_id, payload)
+        # Reference distribution changed — drop cached PSI windows so the
+        # next /api/metrics/drift recomputes against the new per_class support.
+        from api.drift import invalidate_cache
+        invalidate_cache()
 
     return jsonify(
         {

@@ -9,10 +9,16 @@ PSI bands (industry standard):
     < 0.10 — stable
     0.10–0.25 — monitor
     > 0.25 — alert
+
+A per-worker in-memory cache (5 min TTL) keys on (version_id, days) so a
+hot dashboard does not fan out 30 RPCs per refresh. Cache is best-effort —
+on TTL miss we compute fresh, never stale.
 """
 from __future__ import annotations
 
 import math
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -20,6 +26,10 @@ from api.metrics import _get_metric, _rpc
 
 EPSILON = 1e-4
 WINDOW_DAYS = 30
+CACHE_TTL_S = 300
+
+_cache: dict[tuple[str, int], tuple[float, dict]] = {}
+_cache_lock = threading.Lock()
 
 
 def psi(reference: dict, current: dict) -> float:
@@ -53,12 +63,34 @@ def _reference_from_per_class(version_id: str) -> Optional[dict]:
     return out or None
 
 
+def _cache_get(key: tuple[str, int]) -> Optional[dict]:
+    with _cache_lock:
+        hit = _cache.get(key)
+    if not hit:
+        return None
+    ts, value = hit
+    if time.time() - ts > CACHE_TTL_S:
+        return None
+    return value
+
+
+def _cache_put(key: tuple[str, int], value: dict) -> None:
+    with _cache_lock:
+        _cache[key] = (time.time(), value)
+
+
 def compute_drift_window(version_id: str, days: int = WINDOW_DAYS) -> Optional[dict]:
     """For each of the last `days` days, compute PSI vs. reference.
 
     Returns None if no reference distribution can be assembled — caller
     should fall back to synthetic.
+
+    Result is cached per-worker for 5 min keyed on (version_id, days).
     """
+    cached = _cache_get((version_id, days))
+    if cached is not None:
+        return cached
+
     reference = _reference_from_per_class(version_id)
     if reference is None:
         return None
@@ -78,7 +110,15 @@ def compute_drift_window(version_id: str, days: int = WINDOW_DAYS) -> Optional[d
         current = dist if isinstance(dist, dict) else {}
         values.append(psi(reference, current))
 
-    return {"window": days, "values": values}
+    result = {"window": days, "values": values}
+    _cache_put((version_id, days), result)
+    return result
+
+
+def invalidate_cache() -> None:
+    """Clear cached drift windows. Call after a new deploy ingests metrics."""
+    with _cache_lock:
+        _cache.clear()
 
 
 def band_for(value: float) -> str:

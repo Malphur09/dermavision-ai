@@ -45,6 +45,7 @@ def test_compute_drift_window_assembles_n_days():
         # Return matching distribution → PSI ~0
         return {"Melanoma": 1, "Melanocytic Nevus": 2}
 
+    drift.invalidate_cache()
     with patch("api.drift._get_metric", return_value=per_class), \
          patch("api.drift._rpc", side_effect=fake_rpc):
         out = drift.compute_drift_window("v-1", days=5)
@@ -54,3 +55,42 @@ def test_compute_drift_window_assembles_n_days():
     assert len(out["values"]) == 5
     assert all(v < 0.01 for v in out["values"])
     assert len(rpc_calls) == 5
+
+
+def test_compute_drift_window_caches_results():
+    per_class = [{"code": "MEL", "full": "Melanoma", "support": 100}]
+    rpc_calls: list[dict] = []
+
+    def fake_rpc(fn, body):
+        rpc_calls.append(body)
+        return {"Melanoma": 1}
+
+    drift.invalidate_cache()
+    with patch("api.drift._get_metric", return_value=per_class), \
+         patch("api.drift._rpc", side_effect=fake_rpc):
+        a = drift.compute_drift_window("v-cache", days=3)
+        rpc_count_after_first = len(rpc_calls)
+        b = drift.compute_drift_window("v-cache", days=3)
+
+    assert a == b
+    # Second call hit cache → no additional RPCs.
+    assert len(rpc_calls) == rpc_count_after_first
+
+
+def test_invalidate_cache_forces_recompute():
+    per_class = [{"code": "MEL", "full": "Melanoma", "support": 100}]
+    calls = {"n": 0}
+
+    def fake_rpc(fn, body):
+        calls["n"] += 1
+        return {"Melanoma": 1}
+
+    drift.invalidate_cache()
+    with patch("api.drift._get_metric", return_value=per_class), \
+         patch("api.drift._rpc", side_effect=fake_rpc):
+        drift.compute_drift_window("v-inv", days=2)
+        first = calls["n"]
+        drift.invalidate_cache()
+        drift.compute_drift_window("v-inv", days=2)
+
+    assert calls["n"] > first
