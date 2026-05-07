@@ -106,15 +106,55 @@ def _load_labels() -> Optional[list[tuple[str, int]]]:
 
 
 def iter_eval_batches(batch_size: int = 8) -> Iterator[tuple[torch.Tensor, np.ndarray]]:
-    from api.preprocess import preprocess_pil
-
+    """Bucket-backed batches. Reads labels.csv + images/<file> from storage."""
     rows = _load_labels()
     if not rows:
         return
+    yield from _batches_from_rows(
+        rows,
+        load_image=lambda fname: _storage_get(f"{IMAGES_PREFIX}{fname}"),
+        batch_size=batch_size,
+    )
+
+
+def iter_local_batches(local_dir: str, batch_size: int = 8) -> Iterator[tuple[torch.Tensor, np.ndarray]]:
+    """Filesystem-backed batches. Same layout as bucket: labels.csv + images/<file>."""
+    import os
+
+    labels_path = os.path.join(local_dir, "labels.csv")
+    images_dir = os.path.join(local_dir, "images")
+    if not os.path.isfile(labels_path) or not os.path.isdir(images_dir):
+        return
+    with open(labels_path, "rb") as f:
+        raw = f.read()
+    rows: list[tuple[str, int]] = []
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8")))
+    for row in reader:
+        fname = (row.get("filename") or "").strip()
+        label = (row.get("label") or "").strip()
+        if not fname or label not in _LABEL_TO_IDX:
+            continue
+        rows.append((fname, _LABEL_TO_IDX[label]))
+    if not rows:
+        return
+
+    def _load(fname: str) -> Optional[bytes]:
+        p = os.path.join(images_dir, fname)
+        if not os.path.isfile(p):
+            return None
+        with open(p, "rb") as f:
+            return f.read()
+
+    yield from _batches_from_rows(rows, load_image=_load, batch_size=batch_size)
+
+
+def _batches_from_rows(rows, load_image, batch_size: int):
+    from api.preprocess import preprocess_pil
+
     batch_x: list[torch.Tensor] = []
     batch_y: list[int] = []
     for fname, label_idx in rows:
-        img_bytes = _storage_get(f"{IMAGES_PREFIX}{fname}")
+        img_bytes = load_image(fname)
         if img_bytes is None:
             continue
         try:
@@ -154,21 +194,17 @@ def _per_class_prf(cm: np.ndarray) -> list[dict]:
     return out
 
 
-def evaluate(model) -> Optional[dict]:
-    """Run the eval set through `model` and return real metrics.
+def evaluate_iter(model, batches: Iterator[tuple[torch.Tensor, np.ndarray]]) -> Optional[dict]:
+    """Run an arbitrary batch iterator through `model` and return metrics.
 
-    Returns None if the eval set is not provisioned. Single-process,
-    sequential batches — eval set is small (~hundreds of images).
+    Returns None if no batches arrive.
     """
-    if load_manifest() is None:
-        return None
-
     cm = np.zeros((N_CLASSES, N_CLASSES), dtype=np.int64)
     total = 0
 
     model.eval()
     with torch.no_grad():
-        for x, y in iter_eval_batches():
+        for x, y in batches:
             logits = model(x).cpu().numpy()
             preds = np.argmax(logits, axis=1)
             for t, p in zip(y, preds):
@@ -196,3 +232,15 @@ def evaluate(model) -> Optional[dict]:
         },
         "total": total,
     }
+
+
+def evaluate(model) -> Optional[dict]:
+    """Bucket-backed evaluation. Returns None if no manifest is provisioned."""
+    if load_manifest() is None:
+        return None
+    return evaluate_iter(model, iter_eval_batches())
+
+
+def evaluate_local(model, local_dir: str) -> Optional[dict]:
+    """Filesystem-backed evaluation. Use when the eval set is too large for storage."""
+    return evaluate_iter(model, iter_local_batches(local_dir))
