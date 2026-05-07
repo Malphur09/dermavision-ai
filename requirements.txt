@@ -11,3 +11,7 @@ grad-cam>=1.5,<2
 supabase>=2.4,<3
 requests
 weasyprint>=62,<65
+
+# Test deps
+pytest>=8
+pytest-mock>=3

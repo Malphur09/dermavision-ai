@@ -45,7 +45,14 @@ Thumbs.db
 
 # Claude
 CLAUDE.md
+.claude/
 
 # Supabase
 supabase/
 .mcp.json
+
+# Test / coverage artifacts
+coverage/
+.coverage
+.vitest/
+.pytest_cache/
