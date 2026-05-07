@@ -105,7 +105,7 @@ def _load_labels() -> Optional[list[tuple[str, int]]]:
     return rows or None
 
 
-def iter_eval_batches(batch_size: int = 8) -> Iterator[tuple[torch.Tensor, np.ndarray]]:
+def iter_eval_batches(batch_size: int = 8, input_size: Optional[int] = None) -> Iterator[tuple[torch.Tensor, np.ndarray]]:
     """Bucket-backed batches. Reads labels.csv + images/<file> from storage."""
     rows = _load_labels()
     if not rows:
@@ -114,6 +114,7 @@ def iter_eval_batches(batch_size: int = 8) -> Iterator[tuple[torch.Tensor, np.nd
         rows,
         load_image=lambda fname: _storage_get(f"{IMAGES_PREFIX}{fname}"),
         batch_size=batch_size,
+        input_size=input_size,
     )
 
 
@@ -189,7 +190,12 @@ def _detect_and_parse(raw: bytes) -> list[tuple[str, int]]:
     return _parse_simple_labels_csv(raw)
 
 
-def iter_local_batches(local_dir: str, batch_size: int = 8) -> Iterator[tuple[torch.Tensor, np.ndarray]]:
+def iter_local_batches(
+    local_dir: str,
+    batch_size: int = 8,
+    input_size: Optional[int] = None,
+    images_dir: Optional[str] = None,
+) -> Iterator[tuple[torch.Tensor, np.ndarray]]:
     """Filesystem-backed batches.
 
     Accepts either layout:
@@ -199,11 +205,15 @@ def iter_local_batches(local_dir: str, batch_size: int = 8) -> Iterator[tuple[to
 
     Falls back to globbing for the first .csv at the top level so users
     do not have to rename ISIC's published file.
+
+    `images_dir` overrides the default `local_dir/images` lookup for
+    layouts where the image folder has a different name (e.g.
+    `ISIC_2019_Test_Input`).
     """
     import glob
     import os
 
-    images_dir = os.path.join(local_dir, "images")
+    images_dir = images_dir or os.path.join(local_dir, "images")
     if not os.path.isdir(images_dir):
         return
 
@@ -234,10 +244,12 @@ def iter_local_batches(local_dir: str, batch_size: int = 8) -> Iterator[tuple[to
         with open(path, "rb") as f:
             return f.read()
 
-    yield from _batches_from_rows(rows, load_image=_load, batch_size=batch_size)
+    yield from _batches_from_rows(
+        rows, load_image=_load, batch_size=batch_size, input_size=input_size
+    )
 
 
-def _batches_from_rows(rows, load_image, batch_size: int):
+def _batches_from_rows(rows, load_image, batch_size: int, input_size: Optional[int] = None):
     from api.preprocess import preprocess_pil
 
     batch_x: list[torch.Tensor] = []
@@ -247,7 +259,7 @@ def _batches_from_rows(rows, load_image, batch_size: int):
         if img_bytes is None:
             continue
         try:
-            tensor, _ = preprocess_pil(Image.open(io.BytesIO(img_bytes)))
+            tensor, _ = preprocess_pil(Image.open(io.BytesIO(img_bytes)), size=input_size)
         except Exception:
             continue
         batch_x.append(tensor)
@@ -286,7 +298,9 @@ def _per_class_prf(cm: np.ndarray) -> list[dict]:
 def evaluate_iter(model, batches: Iterator[tuple[torch.Tensor, np.ndarray]]) -> Optional[dict]:
     """Run an arbitrary batch iterator through `model` and return metrics.
 
-    Returns None if no batches arrive.
+    Returns None if no batches arrive. argmax of the raw output is the
+    predicted class — works for both logits and softmaxed outputs since
+    argmax is invariant under monotone transforms.
     """
     cm = np.zeros((N_CLASSES, N_CLASSES), dtype=np.int64)
     total = 0
@@ -294,8 +308,8 @@ def evaluate_iter(model, batches: Iterator[tuple[torch.Tensor, np.ndarray]]) -> 
     model.eval()
     with torch.no_grad():
         for x, y in batches:
-            logits = model(x).cpu().numpy()
-            preds = np.argmax(logits, axis=1)
+            out = model(x).cpu().numpy()
+            preds = np.argmax(out, axis=1)
             for t, p in zip(y, preds):
                 cm[int(t), int(p)] += 1
                 total += 1
@@ -323,13 +337,21 @@ def evaluate_iter(model, batches: Iterator[tuple[torch.Tensor, np.ndarray]]) -> 
     }
 
 
-def evaluate(model) -> Optional[dict]:
+def evaluate(model, input_size: Optional[int] = None) -> Optional[dict]:
     """Bucket-backed evaluation. Returns None if no manifest is provisioned."""
     if load_manifest() is None:
         return None
-    return evaluate_iter(model, iter_eval_batches())
+    return evaluate_iter(model, iter_eval_batches(input_size=input_size))
 
 
-def evaluate_local(model, local_dir: str) -> Optional[dict]:
+def evaluate_local(
+    model,
+    local_dir: str,
+    input_size: Optional[int] = None,
+    images_dir: Optional[str] = None,
+) -> Optional[dict]:
     """Filesystem-backed evaluation. Use when the eval set is too large for storage."""
-    return evaluate_iter(model, iter_local_batches(local_dir))
+    return evaluate_iter(
+        model,
+        iter_local_batches(local_dir, input_size=input_size, images_dir=images_dir),
+    )

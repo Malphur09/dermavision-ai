@@ -28,8 +28,8 @@ from api import eval_set
 model_lifecycle_bp = Blueprint("model_lifecycle", __name__, url_prefix="/api")
 
 BUCKET = "model-uploads"
-EXPECTED_INPUT_SHAPE = (1, 3, 456, 456)
-EXPECTED_OUTPUT_SHAPE = (1, 8)
+EXPECTED_OUTPUT_CLASSES = 8
+ALLOWED_INPUT_SIZES = (224, 256, 299, 320, 380, 384, 416, 448, 456, 512)
 BENCH_RUNS = 20
 
 
@@ -122,30 +122,50 @@ def _rest_post(path: str, body: Any, prefer: str = "return=representation") -> O
 
 # ---------- ONNX helpers ----------
 
-def _check_shapes(model: onnx.ModelProto) -> Optional[str]:
-    """Return an error string if input/output shapes don't match, else None."""
+def _input_size(model: onnx.ModelProto) -> Optional[int]:
+    """Read square HxW from the model's input shape. Returns None if not square."""
     try:
-        input0 = model.graph.input[0]
         in_shape = tuple(
-            d.dim_value for d in input0.type.tensor_type.shape.dim
+            d.dim_value for d in model.graph.input[0].type.tensor_type.shape.dim
         )
-        output0 = model.graph.output[0]
+    except Exception:
+        return None
+    if len(in_shape) != 4 or in_shape[1] != 3:
+        return None
+    h, w = in_shape[2], in_shape[3]
+    if h != w or h <= 0:
+        return None
+    return h
+
+
+def _check_shapes(model: onnx.ModelProto) -> Optional[str]:
+    """Validate (B, 3, H, H) input + (B, 8) output. Allows dynamic batch.
+
+    H must be one of ALLOWED_INPUT_SIZES so eval+preprocess don't have to
+    handle arbitrary resolutions.
+    """
+    try:
+        in_shape = tuple(
+            d.dim_value for d in model.graph.input[0].type.tensor_type.shape.dim
+        )
         out_shape = tuple(
-            d.dim_value for d in output0.type.tensor_type.shape.dim
+            d.dim_value for d in model.graph.output[0].type.tensor_type.shape.dim
         )
     except Exception as e:
         return f"Unable to read tensor shapes: {e}"
 
-    if in_shape != EXPECTED_INPUT_SHAPE:
-        # Allow dynamic batch: treat 0/None first dim as 1.
-        in_fixed = (1,) + in_shape[1:] if len(in_shape) == 4 and in_shape[0] in (0, None) else in_shape
-        if in_fixed != EXPECTED_INPUT_SHAPE:
-            return f"Input shape {in_shape} != expected {EXPECTED_INPUT_SHAPE}"
+    if len(in_shape) != 4:
+        return f"Input rank {len(in_shape)} (expected 4: NCHW)"
+    if in_shape[1] != 3:
+        return f"Input channels {in_shape[1]} (expected 3)"
+    if in_shape[2] != in_shape[3] or in_shape[2] not in ALLOWED_INPUT_SIZES:
+        return (
+            f"Input HxW {in_shape[2]}x{in_shape[3]} not in supported sizes "
+            f"{ALLOWED_INPUT_SIZES}"
+        )
 
-    if out_shape != EXPECTED_OUTPUT_SHAPE:
-        out_fixed = (1,) + out_shape[1:] if len(out_shape) == 2 and out_shape[0] in (0, None) else out_shape
-        if out_fixed != EXPECTED_OUTPUT_SHAPE:
-            return f"Output shape {out_shape} != expected {EXPECTED_OUTPUT_SHAPE}"
+    if len(out_shape) != 2 or out_shape[1] != EXPECTED_OUTPUT_CLASSES:
+        return f"Output {out_shape} (expected (*, {EXPECTED_OUTPUT_CLASSES}))"
     return None
 
 
@@ -192,6 +212,7 @@ def validate():
     if shape_err:
         return jsonify({"ok": False, "error": shape_err}), 400
 
+    detected_size = _input_size(model)
     return jsonify(
         {
             "ok": True,
@@ -200,8 +221,8 @@ def validate():
             "format": "onnx",
             "checks": {
                 "structural": True,
-                "input_shape": list(EXPECTED_INPUT_SHAPE),
-                "output_shape": list(EXPECTED_OUTPUT_SHAPE),
+                "input_size": detected_size,
+                "output_classes": EXPECTED_OUTPUT_CLASSES,
             },
         }
     )
@@ -223,12 +244,15 @@ def benchmark():
         return jsonify({"error": "Benchmark only supported for .onnx"}), 400
 
     try:
-        model = onnx2torch.convert(onnx.load_from_string(data))
-        model.eval()
+        onnx_model = onnx.load_from_string(data)
+        size = _input_size(onnx_model) or 384
+        from api.backend import load_inference
+
+        model = load_inference(data)
     except Exception as e:
         return jsonify({"error": f"Model conversion failed: {e}"}), 400
 
-    dummy = torch.randn(*EXPECTED_INPUT_SHAPE, dtype=torch.float32)
+    dummy = torch.randn(1, 3, size, size, dtype=torch.float32)
     latencies = []
     with torch.no_grad():
         # Warmup.
@@ -244,7 +268,7 @@ def benchmark():
 
     eval_results = None
     try:
-        eval_results = eval_set.evaluate(model)
+        eval_results = eval_set.evaluate(model, input_size=size)
     except Exception as e:
         # Eval is best-effort; never fail the latency benchmark on it.
         print(f"[WARNING] Eval-set evaluation failed: {e}")

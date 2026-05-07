@@ -55,6 +55,11 @@ def main() -> int:
     parser.add_argument("model_path", help="Local .onnx model file")
     parser.add_argument("--bench-runs", type=int, default=20, help="Latency runs (default 20)")
     parser.add_argument("--out", help="Write benchmark JSON to this path (default stdout)")
+    parser.add_argument(
+        "--images-dir",
+        help="Override the images directory (default: <eval_dir>/images). "
+        "Use for layouts like ISIC's `ISIC_2019_Test_Input/`.",
+    )
 
     parser.add_argument("--bucket-path", help="Storage path of the same .onnx in model-uploads (required for --deploy)")
     parser.add_argument("--version", help="Version string for deploy (e.g. v1.2)")
@@ -67,15 +72,16 @@ def main() -> int:
     args = parser.parse_args()
 
     import onnx
-    import onnx2torch
     import torch
 
     from api import eval_set
+    from api.backend import load_inference
 
     eval_dir = Path(args.eval_dir)
     model_path = Path(args.model_path)
-    if not (eval_dir / "labels.csv").is_file() or not (eval_dir / "images").is_dir():
-        print(f"ERROR: expected {eval_dir}/labels.csv and {eval_dir}/images/", file=sys.stderr)
+    images_dir = Path(args.images_dir) if args.images_dir else eval_dir / "images"
+    if not images_dir.is_dir():
+        print(f"ERROR: images dir not found: {images_dir}", file=sys.stderr)
         return 2
     if not model_path.is_file():
         print(f"ERROR: model not found: {model_path}", file=sys.stderr)
@@ -84,11 +90,18 @@ def main() -> int:
     print(f"[1/3] Loading model: {model_path}")
     onnx_model = onnx.load(str(model_path))
     onnx.checker.check_model(onnx_model)
-    model = onnx2torch.convert(onnx_model)
-    model.eval()
+    in_dims = onnx_model.graph.input[0].type.tensor_type.shape.dim
+    in_h = in_dims[2].dim_value if len(in_dims) == 4 else 384
+    if in_h <= 0:
+        in_h = 384
+    print(f"      input size: {in_h}x{in_h}")
+    with open(model_path, "rb") as f:
+        model_bytes = f.read()
+    model = load_inference(model_bytes)
+    print(f"      backend: {type(model).__name__}")
 
     print(f"[2/3] Latency benchmark ({args.bench_runs} runs)")
-    dummy = torch.randn(1, 3, 456, 456)
+    dummy = torch.randn(1, 3, in_h, in_h)
     latencies: list[float] = []
     with torch.no_grad():
         for _ in range(3):
@@ -100,8 +113,13 @@ def main() -> int:
     median_ms = int(statistics.median(latencies))
     p95_ms = int(sorted(latencies)[int(len(latencies) * 0.95) - 1])
 
-    print(f"[3/3] Eval-set: iterating {eval_dir}")
-    result = eval_set.evaluate_local(model, str(eval_dir))
+    print(f"[3/3] Eval-set: iterating {eval_dir} (images: {images_dir})")
+    result = eval_set.evaluate_local(
+        model,
+        str(eval_dir),
+        input_size=in_h,
+        images_dir=str(images_dir),
+    )
     if result is None:
         print("ERROR: eval iteration produced no batches — labels.csv may be empty or filenames unmatched.", file=sys.stderr)
         return 1

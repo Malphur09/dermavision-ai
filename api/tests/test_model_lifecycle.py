@@ -43,7 +43,7 @@ def test_validate_rejects_bad_extension(lifecycle_app, admin_bearer):
 
 
 def test_validate_rejects_wrong_shape(lifecycle_app, admin_bearer):
-    bad = _build_onnx((1, 3, 224, 224), (1, 8))
+    bad = _build_onnx((1, 3, 200, 200), (1, 8))  # 200 not in ALLOWED_INPUT_SIZES
     with patch("api._auth._verify_user", return_value={"id": "u1"}), \
          patch("api._auth._check_admin", return_value=True), \
          patch("api.model_lifecycle._storage_download", return_value=bad):
@@ -54,11 +54,12 @@ def test_validate_rejects_wrong_shape(lifecycle_app, admin_bearer):
             headers=admin_bearer,
         )
     assert resp.status_code == 400
-    assert "shape" in resp.get_json()["error"].lower()
+    msg = resp.get_json()["error"].lower()
+    assert "input" in msg or "shape" in msg
 
 
 def test_validate_accepts_correct_shape(lifecycle_app, admin_bearer):
-    good = _build_onnx((1, 3, 456, 456), (1, 8))
+    good = _build_onnx((1, 3, 384, 384), (1, 8))
     with patch("api._auth._verify_user", return_value={"id": "u1"}), \
          patch("api._auth._check_admin", return_value=True), \
          patch("api.model_lifecycle._storage_download", return_value=good):

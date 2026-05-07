@@ -26,6 +26,7 @@ from api.metrics import metrics_bp, insert_telemetry  # noqa: E402
 from api.auth import auth_bp  # noqa: E402
 from api.reports import reports_bp  # noqa: E402
 from api.model_lifecycle import model_lifecycle_bp  # noqa: E402
+from api import preprocess as _preprocess  # noqa: E402
 from api.preprocess import preprocess_bytes  # noqa: E402
 app.register_blueprint(admin_bp)
 app.register_blueprint(metrics_bp)
@@ -61,25 +62,44 @@ _version_last_checked: float = 0.0
 _VERSION_TTL_S: float = 60.0
 
 
-def _set_active_model(model: nn.Module) -> None:
+def _detect_input_size(callable_model) -> int | None:
+    """Probe a candidate input size by running a forward pass."""
+    for size in (384, 456, 224, 512, 299, 320, 380, 416):
+        try:
+            with torch.no_grad():
+                _ = callable_model(torch.zeros(1, 3, size, size, dtype=torch.float32))
+            return size
+        except Exception:
+            continue
+    return None
+
+
+def _set_active_model(backend) -> None:
+    """Install a backend (TorchBackend or OrtBackend). Grad-CAM only when torch."""
     global torch_model, target_layer
     last_conv = None
-    for m in model.modules():
-        if isinstance(m, nn.Conv2d):
-            last_conv = m
-    if last_conv is None:
-        raise RuntimeError("No Conv2d found in converted model")
+    if getattr(backend, "supports_gradcam", False):
+        for m in backend.torch_module.modules():
+            if isinstance(m, nn.Conv2d):
+                last_conv = m
+    size = _detect_input_size(backend)
     with _model_swap_lock:
-        torch_model = model
+        torch_model = backend
         target_layer = last_conv
+    if size:
+        _preprocess.set_input_size(size)
+        print(f"[INFO] Active model input size: {size}x{size}; gradcam={'on' if last_conv else 'off'}")
 
 
 def _load_model_from_disk():
     try:
-        model = onnx2torch.convert(onnx.load(MODEL_PATH))
-        model.eval()
-        _set_active_model(model)
-        print(f"[INFO] Model loaded from disk: {MODEL_PATH}")
+        with open(MODEL_PATH, "rb") as f:
+            data = f.read()
+        from api.backend import load_inference
+
+        backend = load_inference(data)
+        _set_active_model(backend)
+        print(f"[INFO] Model loaded from disk: {MODEL_PATH} ({type(backend).__name__})")
     except Exception as e:
         print(f"[WARNING] Failed to load model from {MODEL_PATH}: {e}")
 
@@ -87,14 +107,14 @@ def _load_model_from_disk():
 def _try_reload_from_storage(bucket_path: str) -> bool:
     """Download an ONNX from the model-uploads bucket and swap it in."""
     try:
+        from api.backend import load_inference
         from api.model_lifecycle import _storage_download
 
         data = _storage_download(bucket_path)
         if data is None:
             return False
-        model = onnx2torch.convert(onnx.load_from_string(data))
-        model.eval()
-        _set_active_model(model)
+        backend = load_inference(data)
+        _set_active_model(backend)
         return True
     except Exception as e:
         print(f"[WARNING] Storage reload failed for {bucket_path}: {e}")
@@ -165,11 +185,16 @@ def predict():
 
     t0 = time.perf_counter()
     with torch.no_grad():
-        logits = torch_model(tensor)[0].numpy()
+        raw = torch_model(tensor)[0].numpy()
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
-    exp_logits = np.exp(logits - logits.max())
-    probs = exp_logits / exp_logits.sum()
+    # Detect already-softmaxed outputs (e.g. ensemble exports with a final
+    # Softmax node). Heuristic: all values in [0,1] and sum ≈ 1.
+    if raw.ndim == 1 and 0.0 <= raw.min() and raw.max() <= 1.0 + 1e-3 and abs(raw.sum() - 1.0) < 1e-2:
+        probs = raw
+    else:
+        exp_logits = np.exp(raw - raw.max())
+        probs = exp_logits / exp_logits.sum()
 
     probabilities = {cls: round(float(p), 4) for cls, p in zip(CLASSES, probs)}
     predicted_class = max(probabilities, key=probabilities.get)
@@ -202,15 +227,20 @@ def gradcam():
     if file.content_type not in {"image/jpeg", "image/jpg", "image/png"}:
         return jsonify({"error": "Invalid file type. Only JPEG and PNG are accepted"}), 415
 
-    if torch_model is None or target_layer is None:
+    if torch_model is None:
         return jsonify({"heatmap": None, "message": "Model not loaded"}), 200
+    if target_layer is None:
+        return jsonify({"heatmap": None, "message": "Grad-CAM unavailable for this model (ORT backend)"}), 200
 
     try:
         image_bytes = file.read()
         tensor, rgb_float = preprocess_image(image_bytes)
 
         with _cam_lock:
-            cam = GradCAMPlusPlus(model=torch_model, target_layers=[target_layer])
+            # GradCAMPlusPlus needs a real torch.nn.Module — pull it from
+            # the TorchBackend wrapper.
+            inner = getattr(torch_model, "torch_module", torch_model)
+            cam = GradCAMPlusPlus(model=inner, target_layers=[target_layer])
             grayscale_cam = cam(input_tensor=tensor, targets=None)[0]
 
         overlay = show_cam_on_image(rgb_float, grayscale_cam, use_rgb=True)
