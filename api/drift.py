@@ -35,13 +35,17 @@ _cache_lock = threading.Lock()
 def psi(reference: dict, current: dict) -> float:
     """Compute PSI between two categorical distributions.
 
-    Both inputs are class -> count dicts. Returns 0.0 if either is empty.
+    Both inputs are class -> count dicts. Returns 0.0 if either side has
+    zero total volume — comparing against no data is meaningless and the
+    epsilon smoothing would otherwise produce an alarmist score.
     """
-    classes = set(reference) | set(current)
-    if not classes:
+    if not reference or not current:
         return 0.0
-    ref_total = sum(reference.values()) or 1
-    cur_total = sum(current.values()) or 1
+    ref_total = sum(reference.values())
+    cur_total = sum(current.values())
+    if ref_total == 0 or cur_total == 0:
+        return 0.0
+    classes = set(reference) | set(current)
     score = 0.0
     for cls in classes:
         p = max(reference.get(cls, 0) / ref_total, EPSILON)
