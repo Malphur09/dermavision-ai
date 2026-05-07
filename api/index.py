@@ -14,6 +14,7 @@ from pytorch_grad_cam import GradCAMPlusPlus
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_limiter import Limiter
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,6 +22,27 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000"])
 
+
+def _rate_limit_key():
+    """Per-user limiter key. Falls back to IP when caller is unauthed.
+
+    Pulled from request.environ['caller'] which @require_user injects.
+    """
+    caller = request.environ.get("caller") or {}
+    user = caller.get("user") if isinstance(caller, dict) else None
+    if user and user.get("id"):
+        return f"user:{user['id']}"
+    return f"ip:{request.remote_addr or 'unknown'}"
+
+
+limiter = Limiter(
+    key_func=_rate_limit_key,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
+from api._auth import require_user  # noqa: E402
 from api.admin import admin_bp  # noqa: E402
 from api.metrics import metrics_bp, insert_telemetry  # noqa: E402
 from api.auth import auth_bp  # noqa: E402
@@ -163,6 +185,8 @@ def health():
 
 
 @app.route("/api/predict", methods=["POST"])
+@require_user
+@limiter.limit("30 per minute")
 def predict():
     _maybe_refresh_model()
 
@@ -213,6 +237,8 @@ def predict():
 
 
 @app.route("/api/gradcam", methods=["POST"])
+@require_user
+@limiter.limit("15 per minute")
 def gradcam():
     _maybe_refresh_model()
 

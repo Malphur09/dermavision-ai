@@ -289,11 +289,19 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
     const predictController = new AbortController();
     const predictTimeout = setTimeout(() => predictController.abort(), 60_000);
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token ?? null;
       const res = await fetch("/api/predict", {
         method: "POST",
         body: formData,
         signal: predictController.signal,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
+      if (res.status === 429) {
+        toast.error("Too many requests — slow down for a minute");
+        setIsProcessing(false);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       prediction = await res.json();
     } catch (err) {
@@ -376,9 +384,12 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
       try {
         const camForm = new FormData();
         camForm.append("file", uploadedFile);
+        const { data: camSession } = await supabase.auth.getSession();
+        const camToken = camSession.session?.access_token ?? null;
         const camRes = await fetch("/api/gradcam", {
           method: "POST",
           body: camForm,
+          headers: camToken ? { Authorization: `Bearer ${camToken}` } : {},
         });
         if (!camRes.ok) return;
         const camData: { heatmap: string | null } = await camRes.json();

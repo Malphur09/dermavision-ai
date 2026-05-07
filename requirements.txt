@@ -12,6 +12,7 @@ grad-cam>=1.5,<2
 supabase>=2.4,<3
 requests
 weasyprint>=62,<65
+Flask-Limiter>=3.5,<4
 
 # Test deps
 pytest>=8
