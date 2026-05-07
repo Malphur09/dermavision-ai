@@ -23,6 +23,7 @@ from flask import Blueprint, jsonify, request
 
 from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, require_admin, service_headers
 from api.metrics import _rest_get, ingest_metrics
+from api import eval_set
 
 model_lifecycle_bp = Blueprint("model_lifecycle", __name__, url_prefix="/api")
 
@@ -241,15 +242,38 @@ def benchmark():
     median_ms = int(statistics.median(latencies))
     p95_ms = int(sorted(latencies)[int(len(latencies) * 0.95) - 1])
 
+    eval_results = None
+    try:
+        eval_results = eval_set.evaluate(model)
+    except Exception as e:
+        # Eval is best-effort; never fail the latency benchmark on it.
+        print(f"[WARNING] Eval-set evaluation failed: {e}")
+
+    if eval_results is None:
+        return jsonify(
+            {
+                "accuracy": None,
+                "f1": None,
+                "latency_ms": median_ms,
+                "latency_p95_ms": p95_ms,
+                "runs": BENCH_RUNS,
+                "eval_set_available": False,
+                "note": "Latency is real; accuracy/F1 null until an eval set is provisioned under eval-set/ in the model-uploads bucket.",
+            }
+        )
+
     return jsonify(
         {
-            "accuracy": None,
-            "f1": None,
+            "accuracy": eval_results["accuracy"],
+            "balanced_acc": eval_results["balanced_acc"],
+            "f1": eval_results["macro_f1"],
+            "per_class": eval_results["per_class"],
+            "confusion": eval_results["confusion"],
+            "eval_total": eval_results["total"],
             "latency_ms": median_ms,
             "latency_p95_ms": p95_ms,
             "runs": BENCH_RUNS,
-            "eval_set_available": False,
-            "note": "Latency is real; accuracy/F1 null until an eval set is provisioned under eval-set/ in the model-uploads bucket.",
+            "eval_set_available": True,
         }
     )
 
@@ -320,13 +344,19 @@ def deploy():
     # result of /model/upload/benchmark back on deploy). Accuracy may be null
     # if no eval set was available; ingest what we have.
     if new_id and bench:
-        summary = {
-            "balanced_acc": bench.get("accuracy"),
-            "macro_f1": bench.get("f1"),
-            "p50_latency_ms": bench.get("latency_ms"),
-            "last_trained_at": None,
+        payload: dict = {
+            "summary": {
+                "balanced_acc": bench.get("balanced_acc") or bench.get("accuracy"),
+                "macro_f1": bench.get("f1"),
+                "p50_latency_ms": bench.get("latency_ms"),
+                "last_trained_at": None,
+            }
         }
-        ingest_metrics(new_id, {"summary": summary})
+        if isinstance(bench.get("per_class"), list):
+            payload["per_class"] = bench["per_class"]
+        if isinstance(bench.get("confusion"), dict):
+            payload["confusion"] = bench["confusion"]
+        ingest_metrics(new_id, payload)
 
     return jsonify(
         {

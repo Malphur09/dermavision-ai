@@ -26,6 +26,7 @@ from api.metrics import metrics_bp, insert_telemetry  # noqa: E402
 from api.auth import auth_bp  # noqa: E402
 from api.reports import reports_bp  # noqa: E402
 from api.model_lifecycle import model_lifecycle_bp  # noqa: E402
+from api.preprocess import preprocess_bytes  # noqa: E402
 app.register_blueprint(admin_bp)
 app.register_blueprint(metrics_bp)
 app.register_blueprint(auth_bp)
@@ -131,18 +132,9 @@ def _maybe_refresh_model() -> None:
 
 _load_model_from_disk()
 
-_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-
 
 def preprocess_image(file_bytes: bytes):
-    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-    img = img.resize((456, 456), Image.BILINEAR)
-    arr = np.array(img, dtype=np.float32) / 255.0
-    rgb_float = arr.copy()
-    arr = (arr - _MEAN) / _STD
-    tensor = torch.from_numpy(arr.transpose(2, 0, 1)).unsqueeze(0)
-    return tensor, rgb_float
+    return preprocess_bytes(file_bytes)
 
 
 @app.route("/api/health")
