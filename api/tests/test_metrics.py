@@ -77,6 +77,33 @@ def test_summary_p50_overrides_when_rpc_returns_int(metrics_app):
     assert resp.get_json()["p50_latency_ms"] == 42
 
 
+def test_latency_synthetic_when_rpc_returns_none(metrics_app):
+    with patch("api.metrics._rpc", return_value=None):
+        client = metrics_app.test_client()
+        resp = client.get("/api/metrics/latency")
+    body = resp.get_json()
+    assert body["synthetic"] is True
+    assert body["p50_ms"] == 0
+    assert body["count"] == 0
+
+
+def test_latency_real_when_rpc_returns_dict(metrics_app):
+    payload = {
+        "p50_ms": 180,
+        "p95_ms": 320,
+        "p99_ms": 540,
+        "count": 1024,
+        "window_days": 7,
+        "throughput_per_hr": 6.1,
+    }
+    with patch("api.metrics._rpc", return_value=payload):
+        client = metrics_app.test_client()
+        resp = client.get("/api/metrics/latency")
+    body = resp.get_json()
+    assert body["synthetic"] is False
+    assert body["p95_ms"] == 320
+
+
 def test_ingest_metrics_filters_unknown_keys():
     from api.metrics import ingest_metrics
     captured = {}

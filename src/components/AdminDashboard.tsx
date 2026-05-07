@@ -61,6 +61,15 @@ interface ConfusionPayload {
   matrix: number[][];
 }
 
+interface LatencyPayload {
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  count: number;
+  window_days: number;
+  throughput_per_hr: number;
+}
+
 function toSeries(values: number[]): Series {
   return values.map((y, x) => ({ x, y: Number(y.toFixed(4)) }));
 }
@@ -75,6 +84,7 @@ export function AdminDashboard() {
   const [curves, setCurves] = useState<TrainingCurves | null>(null);
   const [drift, setDrift] = useState<DriftPayload | null>(null);
   const [confusion, setConfusion] = useState<ConfusionPayload | null>(null);
+  const [latency, setLatency] = useState<LatencyPayload | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -101,18 +111,20 @@ export function AdminDashboard() {
       }
     };
     const load = async () => {
-      const [s, p, c, d, cm] = await Promise.all([
+      const [s, p, c, d, cm, lat] = await Promise.all([
         fetchJson<MetricsSummary>("/api/metrics/summary"),
         fetchJson<{ classes: PerClass[] }>("/api/metrics/per_class"),
         fetchJson<TrainingCurves>("/api/metrics/training_curves"),
         fetchJson<DriftPayload>("/api/metrics/drift"),
         fetchJson<ConfusionPayload>("/api/metrics/confusion"),
+        fetchJson<LatencyPayload>("/api/metrics/latency"),
       ]);
       if (s) setSummary(s);
       if (p?.classes) setPerClass(p.classes);
       if (c) setCurves(c);
       if (d) setDrift(d);
       if (cm) setConfusion(cm);
+      if (lat) setLatency(lat);
     };
     void load();
   }, []);
@@ -508,9 +520,9 @@ export function AdminDashboard() {
             </p>
             <div className="grid grid-cols-3 gap-3">
               {[
-                { l: "p50", v: "342ms" },
-                { l: "p95", v: "486ms" },
-                { l: "p99", v: "712ms" },
+                { l: "p50", v: latency ? `${latency.p50_ms}ms` : "—" },
+                { l: "p95", v: latency ? `${latency.p95_ms}ms` : "—" },
+                { l: "p99", v: latency ? `${latency.p99_ms}ms` : "—" },
               ].map((s) => (
                 <div
                   key={s.l}
@@ -527,7 +539,9 @@ export function AdminDashboard() {
             <div className="mt-4 pt-4 border-t border-border flex items-center justify-between text-xs">
               <span className="text-muted-foreground">Throughput</span>
               <span className="mono font-medium">
-                2,840 req/hr · 98.2% SLO
+                {latency
+                  ? `${latency.throughput_per_hr.toLocaleString()} req/hr · ${latency.count.toLocaleString()} samples`
+                  : "—"}
               </span>
             </div>
           </div>

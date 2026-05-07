@@ -243,6 +243,25 @@ def metrics_drift():
     return jsonify({**_synthetic_drift(), "synthetic": True})
 
 
+@metrics_bp.route("/metrics/latency")
+def metrics_latency():
+    """Real p50/p95/p99 + throughput from inference_telemetry."""
+    payload = _rpc("latency_quantiles", {"window_days": 7})
+    if isinstance(payload, dict):
+        return jsonify({**payload, "synthetic": False})
+    return jsonify(
+        {
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "count": 0,
+            "window_days": 7,
+            "throughput_per_hr": 0,
+            "synthetic": True,
+        }
+    )
+
+
 @metrics_bp.route("/model/versions")
 def model_versions():
     rows = _rest_get(
