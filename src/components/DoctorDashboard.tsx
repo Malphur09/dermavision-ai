@@ -260,7 +260,7 @@ export function DoctorDashboard() {
       value:
         stats.avgConfidence == null
           ? "—"
-          : `${(stats.avgConfidence * 100).toFixed(1)}%`,
+          : `${stats.avgConfidence.toFixed(1)}%`,
       delta: stats.avgConfidence == null ? "no scans yet" : "30-day avg",
       icon: Brain,
       warn: false,
@@ -387,7 +387,7 @@ export function DoctorDashboard() {
                       </div>
                       <div className="text-xs text-muted-foreground mono">
                         {s.confidence != null
-                          ? `${(Number(s.confidence) * 100).toFixed(1)}% conf`
+                          ? `${Number(s.confidence).toFixed(1)}% conf`
                           : "—"}
                       </div>
                     </div>

@@ -49,7 +49,7 @@ const DEPLOY_OPTIONS = [
   {
     k: "production",
     t: "Promote to production",
-    d: "Replace v1.0 immediately. All traffic routed here.",
+    d: "Replace the current production model immediately. All traffic routed here.",
     Icon: Rocket,
     danger: true,
   },

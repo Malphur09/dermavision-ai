@@ -29,6 +29,7 @@ import { Badge } from "@/components/ui/badge";
 type Series = { x: number; y: number }[];
 
 interface MetricsSummary {
+  version?: string | null;
   balanced_acc: number;
   macro_f1: number;
   p50_latency_ms: number;
@@ -245,7 +246,7 @@ export function AdminDashboard() {
     <div className="p-8 max-w-7xl mx-auto">
       <PageHeader
         title="Model metrics"
-        subtitle="Production: v1.0"
+        subtitle={summary?.version ? `Production: ${summary.version}` : "Production model"}
         breadcrumb={["Admin", "Model metrics"]}
         actions={
           <>

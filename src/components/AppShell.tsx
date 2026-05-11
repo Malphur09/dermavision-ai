@@ -80,6 +80,25 @@ export function AppShell({
   const [activeModel, setActiveModel] = useState<ModelVersion | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/model/versions");
+        const json = await res.json();
+        const prod = (json.versions ?? []).find(
+          (v: ModelVersion) => v.status === "production"
+        );
+        if (!cancelled) setActiveModel(prod ?? (json.versions ?? [])[0] ?? null);
+      } catch {
+        // sidebar falls back to neutral copy
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const patientTarget = role === "admin" ? "/admin/patients" : "/records";
 
   const submitShellSearch = () => {
@@ -202,7 +221,7 @@ export function AppShell({
             <div className="text-xs text-muted-foreground leading-relaxed mb-2">
               {activeModel
                 ? `${activeModel.version} · ${activeModel.architecture ?? "ISIC-2019"}`
-                : "v1.0 · ISIC-2019 validation."}
+                : "Loading model…"}
             </div>
             <Button
               variant="outline"

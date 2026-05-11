@@ -205,6 +205,7 @@ def metrics_summary():
         payload = {**_synthetic_summary(), "synthetic": True}
     else:
         payload = {
+            "version": version.get("version") if version else None,
             "balanced_acc": stored.get("balanced_acc"),
             "macro_f1": stored.get("macro_f1"),
             "accuracy": stored.get("accuracy"),
