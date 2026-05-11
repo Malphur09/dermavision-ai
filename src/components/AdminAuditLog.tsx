@@ -86,11 +86,14 @@ export function AdminAuditLog() {
       const since = rangeSinceIso(range);
       if (since) query = query.gte("created_at", since);
       if (debouncedSearch) {
-        const esc = debouncedSearch.replace(/[,%()]/g, "");
-        if (esc) {
-          query = query.or(
-            `resource_id.ilike.%${esc}%,resource_type.ilike.%${esc}%`
-          );
+        const trimmed = debouncedSearch.trim();
+        const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (uuidRe.test(trimmed)) {
+          // resource_id is a uuid column — ilike would error. Use exact match.
+          query = query.eq("resource_id", trimmed);
+        } else {
+          const esc = trimmed.replace(/[,%()]/g, "");
+          if (esc) query = query.ilike("resource_type", `%${esc}%`);
         }
       }
 
