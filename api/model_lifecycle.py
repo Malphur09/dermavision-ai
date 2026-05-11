@@ -349,3 +349,27 @@ def deploy():
     )
 
 
+
+
+EDITABLE_FIELDS = {"version", "architecture", "params", "notes"}
+
+
+@model_lifecycle_bp.route("/model/versions/<version_id>", methods=["PATCH"])
+@require_admin
+def patch_version(version_id: str):
+    """Edit a model_versions row. Admin-gated.
+
+    Whitelisted keys only — status / onnx_path / metrics live elsewhere in the
+    lifecycle and should not be hand-edited.
+    """
+    body = request.get_json(silent=True) or {}
+    updates = {k: v for k, v in body.items() if k in EDITABLE_FIELDS}
+    if not updates:
+        return jsonify({"error": "No editable fields supplied"}), 400
+    if "version" in updates and not str(updates["version"]).strip():
+        return jsonify({"error": "version cannot be blank"}), 400
+    ok = _rest_patch_lib("model_versions", {"id": f"eq.{version_id}"}, updates)
+    if not ok:
+        return jsonify({"error": "Update failed"}), 502
+    return jsonify({"updated": True, "id": version_id, "fields": list(updates.keys())})
+

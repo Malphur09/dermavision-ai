@@ -273,6 +273,7 @@ def model_versions():
         balanced_acc = summary.get("balanced_acc") if isinstance(summary, dict) else None
         out.append(
             {
+                "id": r.get("id"),
                 "version": r.get("version"),
                 "status": r.get("status"),
                 "architecture": r.get("architecture"),

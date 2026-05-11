@@ -5,6 +5,7 @@
 export type ModelStatus = "production" | "staging" | "archived";
 
 export interface ModelVersion {
+  id?: string;
   version: string;
   status: ModelStatus;
   // Populated server-side from model_metrics.summary.balanced_acc for that version.
