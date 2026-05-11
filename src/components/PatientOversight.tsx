@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Download, FileText, Filter, Search } from "lucide-react";
+import { Download, FileText, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
@@ -10,6 +10,7 @@ import { PageHeader } from "@/components/primitives/PageHeader";
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const RISK_META: Record<RiskBucket, { label: string; bg: string; color: string }> = {
   high: {
@@ -56,6 +57,7 @@ interface Kpis {
 export function PatientOversight() {
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
+  const [riskFilter, setRiskFilter] = useState<"all" | RiskBucket>("all");
   const [rows, setRows] = useState<PatientRow[]>([]);
   const [kpis, setKpis] = useState<Kpis | null>(null);
   const [loading, setLoading] = useState(true);
@@ -159,13 +161,15 @@ export function PatientOversight() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (p) =>
+    return rows.filter((p) => {
+      if (riskFilter !== "all" && p.risk !== riskFilter) return false;
+      if (!q) return true;
+      return (
         p.name.toLowerCase().includes(q) ||
         p.patient_id.toLowerCase().includes(q)
-    );
-  }, [rows, search]);
+      );
+    });
+  }, [rows, search, riskFilter]);
 
   const kpiCards = [
     {
@@ -249,9 +253,17 @@ export function PatientOversight() {
                 className="h-9 pl-9 w-[220px]"
               />
             </div>
-            <Button variant="outline" size="sm">
-              <Filter size={12} /> Filters
-            </Button>
+            <Tabs
+              value={riskFilter}
+              onValueChange={(v) => setRiskFilter(v as "all" | RiskBucket)}
+            >
+              <TabsList>
+                <TabsTrigger value="all">All</TabsTrigger>
+                <TabsTrigger value="high">High</TabsTrigger>
+                <TabsTrigger value="med">Moderate</TabsTrigger>
+                <TabsTrigger value="low">Benign</TabsTrigger>
+              </TabsList>
+            </Tabs>
           </div>
         </div>
         <div className="overflow-x-auto">

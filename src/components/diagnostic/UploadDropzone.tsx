@@ -1,7 +1,6 @@
 import { Ref } from "react";
 import {
   CheckCircle,
-  Clock,
   Image as ImageIcon,
   Lock,
   Shield,
@@ -99,9 +98,6 @@ export function UploadDropzone({
             </div>
             <div className="flex items-center gap-1.5">
               <Lock size={12} /> Private to clinic
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Clock size={12} /> ~340ms inference
             </div>
           </div>
         </div>
