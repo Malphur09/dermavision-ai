@@ -40,6 +40,7 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
+import type { ModelVersion } from "@/lib/api-types";
 
 export type NavItem = {
   path: string;
@@ -68,14 +69,6 @@ export function AppShell({
   const [suggestOpen, setSuggestOpen] = useState(false);
   const searchWrapRef = useRef<HTMLDivElement>(null);
 
-  type ModelVersion = {
-    version: string;
-    status: string;
-    architecture?: string | null;
-    params?: string | null;
-    notes?: string | null;
-    date?: string | null;
-  };
   const [modelOpen, setModelOpen] = useState(false);
   const [activeModel, setActiveModel] = useState<ModelVersion | null>(null);
   const [modelLoading, setModelLoading] = useState(false);

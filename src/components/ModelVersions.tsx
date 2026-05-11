@@ -14,16 +14,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-interface ModelVersion {
-  version: string;
-  status: "production" | "staging" | "archived";
-  accuracy: number;
-  date: string;
-  architecture: string;
-  params: string;
-  notes: string;
-}
+import type { ModelVersion } from "@/lib/api-types";
 
+// Per-class slice used in this screen — only F1 is read here, so keep it
+// narrow to avoid pulling the wide shared shape across the wire mapping.
 interface PerClass {
   code: string;
   f1: number;
@@ -167,7 +161,9 @@ export function ModelVersions() {
                   <div>
                     <div className="text-xs text-muted-foreground">Accuracy</div>
                     <div className="mono font-medium">
-                      {(side.v.accuracy * 100).toFixed(1)}%
+                      {side.v.accuracy != null
+                        ? `${(side.v.accuracy * 100).toFixed(1)}%`
+                        : "n/a"}
                     </div>
                   </div>
                   <div>
@@ -310,7 +306,9 @@ export function ModelVersions() {
                         <StatusBadge status={v.status} />
                       </td>
                       <td className="px-5 py-3 mono text-sm">
-                        {(v.accuracy * 100).toFixed(1)}%
+                        {v.accuracy != null
+                          ? `${(v.accuracy * 100).toFixed(1)}%`
+                          : "n/a"}
                       </td>
                       <td className="px-5 py-3 text-sm text-muted-foreground">
                         {v.architecture}

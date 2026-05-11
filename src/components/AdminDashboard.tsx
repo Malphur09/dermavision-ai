@@ -26,52 +26,15 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 
+import type {
+  ConfusionPayload,
+  DriftPayload,
+  LatencyPayload,
+  MetricsSummary,
+  PerClass,
+} from "@/lib/api-types";
+
 type Series = { x: number; y: number }[];
-
-interface MetricsSummary {
-  version?: string | null;
-  balanced_acc: number;
-  macro_f1: number;
-  p50_latency_ms: number;
-  accuracy?: number | null;
-  weighted_f1?: number | null;
-  macro_auc_ovr?: number | null;
-  last_trained_at?: string | null;
-  previous?: {
-    version: string;
-    balanced_acc: number;
-    macro_f1: number;
-    p50_latency_ms?: number;
-  } | null;
-}
-
-interface PerClass {
-  code: string;
-  full: string;
-  f1: number;
-  precision: number;
-  recall: number;
-  support: number;
-}
-
-interface DriftPayload {
-  window: number;
-  values: number[];
-}
-
-interface ConfusionPayload {
-  classes: string[];
-  matrix: number[][];
-}
-
-interface LatencyPayload {
-  p50_ms: number;
-  p95_ms: number;
-  p99_ms: number;
-  count: number;
-  window_days: number;
-  throughput_per_hr: number;
-}
 
 function toSeries(values: number[]): Series {
   return values.map((y, x) => ({ x, y: Number(y.toFixed(4)) }));
