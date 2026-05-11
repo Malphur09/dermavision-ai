@@ -26,9 +26,12 @@ services:
       - "5328"
     env_file:
       - .env
+    environment:
+      PTH_MODEL_PATH: ${PTH_MODEL_PATH:-/models/dermavision_ensemble_3way.pth}
     volumes:
       - .:/app
-    command: gunicorn --bind 0.0.0.0:5328 --workers 2 --threads 4 --reload api.index:app
+      - ${PTH_HOST_DIR:-${HOME}/code/dataset}:/models:ro
+    command: gunicorn --bind 0.0.0.0:5328 --workers 1 --threads 4 --reload --timeout 120 api.index:app
 
 volumes:
   web_node_modules:

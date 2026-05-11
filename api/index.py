@@ -97,10 +97,11 @@ def _detect_input_size(callable_model) -> int | None:
 
 
 def _set_active_model(backend) -> None:
-    """Install a backend (TorchBackend or OrtBackend). Grad-CAM only when torch."""
+    """Install a backend. Bespoke gradcam (PthBackend) bypasses target-layer hunt."""
     global torch_model, target_layer
     last_conv = None
-    if getattr(backend, "supports_gradcam", False):
+    has_bespoke = hasattr(backend, "gradcam") and callable(getattr(backend, "gradcam"))
+    if not has_bespoke and getattr(backend, "supports_gradcam", False):
         for m in backend.torch_module.modules():
             if isinstance(m, nn.Conv2d):
                 last_conv = m
@@ -110,7 +111,8 @@ def _set_active_model(backend) -> None:
         target_layer = last_conv
     if size:
         _preprocess.set_input_size(size)
-        print(f"[INFO] Active model input size: {size}x{size}; gradcam={'on' if last_conv else 'off'}")
+        status = "bespoke" if has_bespoke else ("on" if last_conv else "off")
+        print(f"[INFO] Active model input size: {size}x{size}; gradcam={status}")
 
 
 def _load_model_from_disk():
@@ -124,6 +126,23 @@ def _load_model_from_disk():
         print(f"[INFO] Model loaded from disk: {MODEL_PATH} ({type(backend).__name__})")
     except Exception as e:
         print(f"[WARNING] Failed to load model from {MODEL_PATH}: {e}")
+
+
+def _try_load_pth() -> bool:
+    """Load native PyTorch ensemble if PTH_MODEL_PATH env points to a real file."""
+    pth_path = os.getenv("PTH_MODEL_PATH")
+    if not pth_path or not os.path.exists(pth_path):
+        return False
+    try:
+        from api.pth_backend import load_pth
+
+        backend = load_pth(pth_path)
+        _set_active_model(backend)
+        print(f"[INFO] PTH model loaded: {pth_path} (PthBackend)")
+        return True
+    except Exception as e:
+        print(f"[WARNING] PTH load failed for {pth_path}: {e}")
+        return False
 
 
 def _try_reload_from_storage(bucket_path: str) -> bool:
@@ -145,6 +164,9 @@ def _try_reload_from_storage(bucket_path: str) -> bool:
 
 def _maybe_refresh_model() -> None:
     global _active_version_id, _active_path, _version_last_checked
+    # PTH side-car pins the active model — skip DB-driven ONNX swaps.
+    if os.getenv("PTH_MODEL_PATH"):
+        return
     now = time.time()
     if now - _version_last_checked < _VERSION_TTL_S:
         return
@@ -172,7 +194,8 @@ def _maybe_refresh_model() -> None:
         print(f"[WARNING] Active version check failed: {e}")
 
 
-_load_model_from_disk()
+if not _try_load_pth():
+    _load_model_from_disk()
 
 
 def preprocess_image(file_bytes: bytes):
@@ -255,19 +278,22 @@ def gradcam():
 
     if torch_model is None:
         return jsonify({"heatmap": None, "message": "Model not loaded"}), 200
-    if target_layer is None:
+
+    bespoke = hasattr(torch_model, "gradcam") and callable(getattr(torch_model, "gradcam"))
+    if not bespoke and target_layer is None:
         return jsonify({"heatmap": None, "message": "Grad-CAM unavailable for this model (ORT backend)"}), 200
 
     try:
         image_bytes = file.read()
         tensor, rgb_float = preprocess_image(image_bytes)
 
-        with _cam_lock:
-            # GradCAMPlusPlus needs a real torch.nn.Module — pull it from
-            # the TorchBackend wrapper.
-            inner = getattr(torch_model, "torch_module", torch_model)
-            cam = GradCAMPlusPlus(model=inner, target_layers=[target_layer])
-            grayscale_cam = cam(input_tensor=tensor, targets=None)[0]
+        if bespoke:
+            grayscale_cam = torch_model.gradcam(tensor)
+        else:
+            with _cam_lock:
+                inner = getattr(torch_model, "torch_module", torch_model)
+                cam = GradCAMPlusPlus(model=inner, target_layers=[target_layer])
+                grayscale_cam = cam(input_tensor=tensor, targets=None)[0]
 
         overlay = show_cam_on_image(rgb_float, grayscale_cam, use_rgb=True)
         buf = io.BytesIO()
