@@ -140,12 +140,12 @@ export function DoctorDashboard() {
         supabase
           .from("cases")
           .select(
-            "id, predicted_class, patient_id, patients ( name, patient_id )"
+            "id, predicted_class, patient_id, created_at, patients ( name, patient_id )"
           )
           .eq("doctor_id", user.id)
           .eq("risk_level", "High Risk")
-          .order("created_at", { ascending: false })
-          .limit(3),
+          .eq("status", "pending")
+          .order("created_at", { ascending: false }),
         supabase
           .from("cases")
           .select("confidence")
@@ -182,6 +182,7 @@ export function DoctorDashboard() {
         id: string;
         predicted_class: string | null;
         patient_id: string;
+        created_at: string;
         patients: { name: string | null; patient_id: string | null } | null;
       };
 
@@ -198,15 +199,22 @@ export function DoctorDashboard() {
       );
       setRecent(recentRows);
 
-      const urgentRows: UrgentRow[] = ((urgentRes.data ?? []) as unknown as UrgentJoin[]).map(
-        (r) => ({
+      // Dedupe by patient: each patient appears at most once, keyed off the
+      // most recent pending High-Risk case. Rows arrive sorted desc by
+      // created_at, so a Map keeps the first hit per patient_id.
+      const seen = new Map<string, UrgentJoin>();
+      for (const r of (urgentRes.data ?? []) as unknown as UrgentJoin[]) {
+        if (!seen.has(r.patient_id)) seen.set(r.patient_id, r);
+      }
+      const urgentRows: UrgentRow[] = Array.from(seen.values())
+        .slice(0, 5)
+        .map((r) => ({
           id: r.id,
           predicted_class: r.predicted_class,
           patient_id: r.patient_id,
           patient_name: r.patients?.name ?? "—",
           patient_code: r.patients?.patient_id ?? "—",
-        })
-      );
+        }));
       setUrgent(urgentRows);
     };
     load();
