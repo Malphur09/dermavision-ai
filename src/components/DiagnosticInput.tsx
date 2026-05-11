@@ -391,9 +391,15 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
           body: camForm,
           headers: camToken ? { Authorization: `Bearer ${camToken}` } : {},
         });
-        if (!camRes.ok) return;
-        const camData: { heatmap: string | null } = await camRes.json();
-        if (!camData.heatmap) return;
+        if (!camRes.ok) {
+          toast.warning(`Heatmap unavailable (HTTP ${camRes.status})`);
+          return;
+        }
+        const camData: { heatmap: string | null; message?: string } = await camRes.json();
+        if (!camData.heatmap) {
+          toast.warning(camData.message ?? "Heatmap unavailable");
+          return;
+        }
 
         const stored = sessionStorage.getItem("lastCase");
         if (stored) {
@@ -416,13 +422,16 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
             contentType: "image/png",
             upsert: true,
           });
-        if (hmUploadErr) return;
+        if (hmUploadErr) {
+          toast.warning(`Heatmap upload failed: ${hmUploadErr.message}`);
+          return;
+        }
         await supabase
           .from("cases")
           .update({ gradcam_url: heatmapPath })
           .eq("id", newCase.id);
-      } catch {
-        /* silent — heatmap is non-critical */
+      } catch (e) {
+        toast.warning(`Heatmap pipeline error: ${e instanceof Error ? e.message : "unknown"}`);
       }
     })();
   };

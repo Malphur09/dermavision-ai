@@ -267,7 +267,7 @@ def model_versions():
     rows = _rest_get(
         "model_versions",
         {
-            "select": "version,status,architecture,params,notes,deployed_at,created_at",
+            "select": "id,version,status,architecture,params,notes,deployed_at,created_at",
             "order": "created_at.desc",
         },
     )
@@ -289,18 +289,21 @@ def model_versions():
             }
         )
 
-    out = [
-        {
-            "version": r.get("version"),
-            "status": r.get("status"),
-            "architecture": r.get("architecture"),
-            "params": r.get("params"),
-            "notes": r.get("notes"),
-            "date": (r.get("deployed_at") or r.get("created_at") or "")[:10],
-            "accuracy": None,
-        }
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        summary = _get_metric(r.get("id"), "summary") if r.get("id") else None
+        balanced_acc = summary.get("balanced_acc") if isinstance(summary, dict) else None
+        out.append(
+            {
+                "version": r.get("version"),
+                "status": r.get("status"),
+                "architecture": r.get("architecture"),
+                "params": r.get("params"),
+                "notes": r.get("notes"),
+                "date": (r.get("deployed_at") or r.get("created_at") or "")[:10],
+                "accuracy": balanced_acc,
+            }
+        )
     return jsonify({"versions": out, "synthetic": False})
 
 

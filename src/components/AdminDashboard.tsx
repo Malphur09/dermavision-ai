@@ -162,17 +162,17 @@ export function AdminDashboard() {
     {
       label: "Balanced accuracy",
       value: summary ? `${(summary.balanced_acc * 100).toFixed(1)}%` : "—",
-      delta: "+0.5pp vs prior",
+      delta: "test-set holdout",
     },
     {
       label: "Macro F1",
       value: summary ? summary.macro_f1.toFixed(3) : "—",
-      delta: "+0.012",
+      delta: "test-set holdout",
     },
     {
       label: "Inference p50",
       value: summary ? `${summary.p50_latency_ms}ms` : "—",
-      delta: "−8ms",
+      delta: "rolling 7d",
     },
     {
       label: "Scans today",
