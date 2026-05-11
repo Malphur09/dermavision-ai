@@ -32,6 +32,16 @@ interface MetricsSummary {
   balanced_acc: number;
   macro_f1: number;
   p50_latency_ms: number;
+  accuracy?: number | null;
+  weighted_f1?: number | null;
+  macro_auc_ovr?: number | null;
+  last_trained_at?: string | null;
+  previous?: {
+    version: string;
+    balanced_acc: number;
+    macro_f1: number;
+    p50_latency_ms?: number;
+  } | null;
 }
 
 interface PerClass {
@@ -41,14 +51,6 @@ interface PerClass {
   precision: number;
   recall: number;
   support: number;
-}
-
-interface TrainingCurves {
-  epochs: number[];
-  train_loss: number[];
-  val_loss: number[];
-  train_acc: number[];
-  val_acc: number[];
 }
 
 interface DriftPayload {
@@ -81,7 +83,6 @@ export function AdminDashboard() {
   const [exporting, setExporting] = useState(false);
   const [summary, setSummary] = useState<MetricsSummary | null>(null);
   const [perClass, setPerClass] = useState<PerClass[]>([]);
-  const [curves, setCurves] = useState<TrainingCurves | null>(null);
   const [drift, setDrift] = useState<DriftPayload | null>(null);
   const [confusion, setConfusion] = useState<ConfusionPayload | null>(null);
   const [latency, setLatency] = useState<LatencyPayload | null>(null);
@@ -111,32 +112,21 @@ export function AdminDashboard() {
       }
     };
     const load = async () => {
-      const [s, p, c, d, cm, lat] = await Promise.all([
+      const [s, p, d, cm, lat] = await Promise.all([
         fetchJson<MetricsSummary>("/api/metrics/summary"),
         fetchJson<{ classes: PerClass[] }>("/api/metrics/per_class"),
-        fetchJson<TrainingCurves>("/api/metrics/training_curves"),
         fetchJson<DriftPayload>("/api/metrics/drift"),
         fetchJson<ConfusionPayload>("/api/metrics/confusion"),
         fetchJson<LatencyPayload>("/api/metrics/latency"),
       ]);
       if (s) setSummary(s);
       if (p?.classes) setPerClass(p.classes);
-      if (c) setCurves(c);
       if (d) setDrift(d);
       if (cm) setConfusion(cm);
       if (lat) setLatency(lat);
     };
     void load();
   }, []);
-
-  const accCurve = useMemo<Series>(
-    () => (curves ? toSeries(curves.val_acc) : []),
-    [curves]
-  );
-  const lossCurve = useMemo<Series>(
-    () => (curves ? toSeries(curves.val_loss) : []),
-    [curves]
-  );
   const driftCurve = useMemo<Series>(
     () => (drift ? toSeries(drift.values) : []),
     [drift]
@@ -158,16 +148,24 @@ export function AdminDashboard() {
   const CM_CLASSES = confusion?.classes ?? [];
   const CM_MAT = confusion?.matrix ?? [];
 
+  const prev = summary?.previous ?? null;
+  const fmtDelta = (curr: number | undefined, prior: number | undefined, fmt: (n: number) => string) => {
+    if (curr == null || prior == null || !prev) return "test-set holdout";
+    const d = curr - prior;
+    const sign = d >= 0 ? "+" : "−";
+    return `${sign}${fmt(Math.abs(d))} vs ${prev.version}`;
+  };
+
   const kpis = [
     {
       label: "Balanced accuracy",
       value: summary ? `${(summary.balanced_acc * 100).toFixed(1)}%` : "—",
-      delta: "test-set holdout",
+      delta: fmtDelta(summary?.balanced_acc, prev?.balanced_acc, (n) => `${(n * 100).toFixed(1)}pp`),
     },
     {
       label: "Macro F1",
       value: summary ? summary.macro_f1.toFixed(3) : "—",
-      delta: "test-set holdout",
+      delta: fmtDelta(summary?.macro_f1, prev?.macro_f1, (n) => n.toFixed(3)),
     },
     {
       label: "Inference p50",
@@ -298,143 +296,25 @@ export function AdminDashboard() {
         ))}
       </div>
 
-      <div className="grid gap-5 mb-6 lg:grid-cols-2">
-        <div className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="font-semibold">Training curves</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                v1.0 · 40 epochs
-              </p>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {[
+          { label: "Accuracy", value: summary?.accuracy != null ? `${(summary.accuracy * 100).toFixed(2)}%` : "—" },
+          { label: "Weighted F1", value: summary?.weighted_f1 != null ? summary.weighted_f1.toFixed(4) : "—" },
+          { label: "Macro AUC (OvR)", value: summary?.macro_auc_ovr != null ? summary.macro_auc_ovr.toFixed(4) : "—" },
+          {
+            label: "Last evaluated",
+            value: summary?.last_trained_at
+              ? new Date(summary.last_trained_at).toISOString().slice(0, 10)
+              : "—",
+          },
+        ].map((m) => (
+          <div key={m.label} className="rounded-lg border border-border bg-card p-4">
+            <div className="text-xs text-muted-foreground uppercase tracking-wide mono mb-1">
+              {m.label}
             </div>
-            <div className="flex items-center gap-3 text-xs">
-              <span className="flex items-center gap-1.5">
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    background: "hsl(var(--brand))",
-                    borderRadius: 2,
-                  }}
-                />{" "}
-                Val acc
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    background: "hsl(var(--destructive))",
-                    borderRadius: 2,
-                  }}
-                />{" "}
-                Val loss
-              </span>
-            </div>
+            <div className="text-xl font-semibold tracking-tight mono">{m.value}</div>
           </div>
-          <div className="h-[140px]">
-            <ResponsiveContainer>
-              <LineChart data={accCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
-                <XAxis dataKey="x" hide />
-                <YAxis domain={[0.5, 1]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
-                <Tooltip
-                  contentStyle={{
-                    background: "hsl(var(--popover))",
-                    border: "1px solid hsl(var(--border))",
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
-                />
-                <Line type="monotone" dataKey="y" stroke="hsl(var(--brand))" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="h-[120px] mt-2">
-            <ResponsiveContainer>
-              <LineChart data={lossCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
-                <XAxis dataKey="x" hide />
-                <YAxis domain={[0, 2]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
-                <Tooltip
-                  contentStyle={{
-                    background: "hsl(var(--popover))",
-                    border: "1px solid hsl(var(--border))",
-                    borderRadius: 8,
-                    fontSize: 12,
-                  }}
-                />
-                <Line type="monotone" dataKey="y" stroke="hsl(var(--destructive))" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="font-semibold">ROC curves (one-vs-rest)</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Macro AUC: <span className="mono font-medium">0.964</span>
-              </p>
-            </div>
-          </div>
-          <svg width="100%" height="220" viewBox="0 0 480 220">
-            <line x1="36" y1="196" x2="470" y2="196" stroke="hsl(var(--border))" />
-            <line x1="36" y1="10" x2="36" y2="196" stroke="hsl(var(--border))" />
-            <line
-              x1="36"
-              y1="196"
-              x2="470"
-              y2="10"
-              stroke="hsl(var(--muted-foreground))"
-              strokeDasharray="3 3"
-              opacity="0.5"
-            />
-            {ISIC_CLASSES.map((c, ci) => {
-              const points = Array.from({ length: 40 }, (_, i) => {
-                const x = i / 39;
-                const y = Math.min(1, Math.pow(x, 0.12 + ci * 0.02));
-                return `${36 + x * 434},${196 - y * 186}`;
-              }).join(" ");
-              return (
-                <polyline
-                  key={c.code}
-                  points={points}
-                  fill="none"
-                  stroke={c.color}
-                  strokeWidth="1.5"
-                  opacity="0.85"
-                />
-              );
-            })}
-            <text
-              x="252"
-              y="214"
-              fontSize="10"
-              fill="hsl(var(--muted-foreground))"
-              textAnchor="middle"
-              className="mono"
-            >
-              False Positive Rate
-            </text>
-          </svg>
-          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
-            {ISIC_CLASSES.map((c) => (
-              <span key={c.code} className="flex items-center gap-1.5 text-xs">
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    background: c.color,
-                    borderRadius: 2,
-                  }}
-                />{" "}
-                {c.code}
-              </span>
-            ))}
-          </div>
-        </div>
+        ))}
       </div>
 
       <div className="grid gap-5 mb-6 lg:grid-cols-[1.2fr_1fr]">
@@ -443,7 +323,10 @@ export function AdminDashboard() {
             <div>
               <h3 className="font-semibold">Confusion matrix</h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Validation set · 4,312 samples · row-normalized %
+                {(() => {
+                  const n = CM_MAT.reduce((a, r) => a + r.reduce((b, v) => b + v, 0), 0);
+                  return n > 0 ? `Test set · ${n.toLocaleString()} samples · row-normalized %` : "Test set · row-normalized %";
+                })()}
               </p>
             </div>
           </div>

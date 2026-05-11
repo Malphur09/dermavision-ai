@@ -175,6 +175,26 @@ def _synthetic_drift():
 
 # ---------- Endpoints ----------
 
+def _previous_summary() -> Optional[dict]:
+    """Most recent archived version's summary metric (for delta computation)."""
+    rows = _rest_get(
+        "model_versions",
+        {
+            "status": "eq.archived",
+            "select": "id,version,deployed_at",
+            "order": "deployed_at.desc",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        return None
+    prev = rows[0]
+    stored = _get_metric(prev["id"], "summary")
+    if not isinstance(stored, dict):
+        return None
+    return {"version": prev.get("version"), **stored}
+
+
 @metrics_bp.route("/metrics/summary")
 def metrics_summary():
     version = _active_version()
@@ -187,6 +207,9 @@ def metrics_summary():
         payload = {
             "balanced_acc": stored.get("balanced_acc"),
             "macro_f1": stored.get("macro_f1"),
+            "accuracy": stored.get("accuracy"),
+            "weighted_f1": stored.get("weighted_f1"),
+            "macro_auc_ovr": stored.get("macro_auc_ovr"),
             "last_trained_at": stored.get("last_trained_at")
             or (version.get("deployed_at") if version else None),
             "p50_latency_ms": stored.get("p50_latency_ms", 0),
@@ -196,6 +219,7 @@ def metrics_summary():
     if isinstance(p50, int):
         payload["p50_latency_ms"] = p50
 
+    payload["previous"] = _previous_summary()
     return jsonify(payload)
 
 

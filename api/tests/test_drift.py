@@ -38,12 +38,21 @@ def test_compute_drift_window_assembles_n_days():
         {"code": "MEL", "full": "Melanoma", "support": 100},
         {"code": "NV", "full": "Melanocytic Nevus", "support": 200},
     ]
-    rpc_calls: list[dict] = []
+    rpc_calls: list[tuple[str, dict]] = []
+
+    from datetime import datetime, timedelta, timezone
+
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    buckets = {
+        (end - timedelta(days=i)).date().isoformat(): {"Melanoma": 1, "Melanocytic Nevus": 2}
+        for i in range(1, 6)
+    }
 
     def fake_rpc(fn, body):
-        rpc_calls.append(body)
-        # Return matching distribution → PSI ~0
-        return {"Melanoma": 1, "Melanocytic Nevus": 2}
+        rpc_calls.append((fn, body))
+        if fn == "class_distribution_daily":
+            return buckets
+        return {}
 
     drift.invalidate_cache()
     with patch("api.drift._get_metric", return_value=per_class), \
@@ -54,7 +63,9 @@ def test_compute_drift_window_assembles_n_days():
     assert out["window"] == 5
     assert len(out["values"]) == 5
     assert all(v < 0.01 for v in out["values"])
-    assert len(rpc_calls) == 5
+    # One bulk RPC replaces the former per-day fan-out.
+    assert len(rpc_calls) == 1
+    assert rpc_calls[0][0] == "class_distribution_daily"
 
 
 def test_compute_drift_window_caches_results():

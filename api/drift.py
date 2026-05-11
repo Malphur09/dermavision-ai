@@ -86,10 +86,12 @@ def _cache_put(key: tuple[str, int], value: dict) -> None:
 def compute_drift_window(version_id: str, days: int = WINDOW_DAYS) -> Optional[dict]:
     """For each of the last `days` days, compute PSI vs. reference.
 
-    Returns None if no reference distribution can be assembled — caller
-    should fall back to synthetic.
+    One RPC fetches all daily class distributions at once
+    (`class_distribution_daily`), then PSI is computed in-process per day.
+    Replaces a former N-roundtrip loop.
 
-    Result is cached per-worker for 5 min keyed on (version_id, days).
+    Returns None if no reference distribution can be assembled — caller
+    should fall back to synthetic. Per-worker cache, 5 min TTL.
     """
     cached = _cache_get((version_id, days))
     if cached is not None:
@@ -99,20 +101,15 @@ def compute_drift_window(version_id: str, days: int = WINDOW_DAYS) -> Optional[d
     if reference is None:
         return None
 
+    buckets = _rpc("class_distribution_daily", {"window_days": days})
+    by_day: dict = buckets if isinstance(buckets, dict) else {}
+
     end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     values: list[float] = []
     for i in range(days, 0, -1):
-        day_start = end - timedelta(days=i)
-        day_end = end - timedelta(days=i - 1)
-        dist = _rpc(
-            "class_distribution",
-            {
-                "window_start": day_start.isoformat(),
-                "window_end": day_end.isoformat(),
-            },
-        )
-        current = dist if isinstance(dist, dict) else {}
-        values.append(psi(reference, current))
+        day = (end - timedelta(days=i)).date().isoformat()
+        current = by_day.get(day) or {}
+        values.append(psi(reference, current if isinstance(current, dict) else {}))
 
     result = {"window": days, "values": values}
     _cache_put((version_id, days), result)
