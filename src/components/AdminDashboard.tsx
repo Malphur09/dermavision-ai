@@ -1,20 +1,10 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { AlertTriangle, CheckCircle2, Download, Eye, TrendingUp, Upload } from "lucide-react";
+import { Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
-import { ISIC_CLASSES } from "@/lib/isic-classes";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +14,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 
 import type {
   ConfusionPayload,
@@ -33,17 +22,19 @@ import type {
   MetricsSummary,
   PerClass,
 } from "@/lib/api-types";
+import { KpiTile } from "@/components/admin/KpiTile";
+import { HeadlineMetricsRow } from "@/components/admin/HeadlineMetricsRow";
+import { ConfusionMatrixCard } from "@/components/admin/ConfusionMatrixCard";
+import { LatencyCard } from "@/components/admin/LatencyCard";
+import { DriftCard } from "@/components/admin/DriftCard";
+import { PerClassTable } from "@/components/admin/PerClassTable";
 
-type Series = { x: number; y: number }[];
-
-function toSeries(values: number[]): Series {
-  return values.map((y, x) => ({ x, y: Number(y.toFixed(4)) }));
-}
+type Range = "24h" | "7d" | "30d" | "all";
 
 export function AdminDashboard() {
   const router = useRouter();
   const [scansToday, setScansToday] = useState<number | null>(null);
-  const [range, setRange] = useState<"24h" | "7d" | "30d" | "all">("7d");
+  const [range, setRange] = useState<Range>("7d");
   const [exporting, setExporting] = useState(false);
   const [summary, setSummary] = useState<MetricsSummary | null>(null);
   const [perClass, setPerClass] = useState<PerClass[]>([]);
@@ -91,29 +82,13 @@ export function AdminDashboard() {
     };
     void load();
   }, []);
-  const driftCurve = useMemo<Series>(
-    () => (drift ? toSeries(drift.values) : []),
-    [drift]
-  );
-  const driftCurrent = drift && drift.values.length > 0 ? drift.values[drift.values.length - 1] : null;
-  const drift7dAvg = useMemo<number | null>(() => {
-    if (!drift || drift.values.length === 0) return null;
-    const tail = drift.values.slice(-7);
-    return tail.reduce((a, b) => a + b, 0) / tail.length;
-  }, [drift]);
-  const driftBand: "stable" | "monitor" | "alert" =
-    drift7dAvg === null ? "stable" : drift7dAvg < 0.1 ? "stable" : drift7dAvg < 0.25 ? "monitor" : "alert";
-
-  const classColor = (code: string) =>
-    ISIC_CLASSES.find((c) => c.code === code)?.color ?? "hsl(var(--brand))";
-  const className = (code: string) =>
-    ISIC_CLASSES.find((c) => c.code === code)?.name ?? code;
-
-  const CM_CLASSES = confusion?.classes ?? [];
-  const CM_MAT = confusion?.matrix ?? [];
 
   const prev = summary?.previous ?? null;
-  const fmtDelta = (curr: number | undefined, prior: number | undefined, fmt: (n: number) => string) => {
+  const fmtDelta = (
+    curr: number | undefined,
+    prior: number | undefined,
+    fmt: (n: number) => string
+  ) => {
     if (curr == null || prior == null || !prev) return "test-set holdout";
     const d = curr - prior;
     const sign = d >= 0 ? "+" : "−";
@@ -124,7 +99,11 @@ export function AdminDashboard() {
     {
       label: "Balanced accuracy",
       value: summary ? `${(summary.balanced_acc * 100).toFixed(1)}%` : "—",
-      delta: fmtDelta(summary?.balanced_acc, prev?.balanced_acc, (n) => `${(n * 100).toFixed(1)}pp`),
+      delta: fmtDelta(
+        summary?.balanced_acc,
+        prev?.balanced_acc,
+        (n) => `${(n * 100).toFixed(1)}pp`
+      ),
     },
     {
       label: "Macro F1",
@@ -187,7 +166,9 @@ export function AdminDashboard() {
       const csv = [
         header.join(","),
         ...rows.map((r) =>
-          header.map((k) => csvEscape((r as Record<string, unknown>)[k])).join(",")
+          header
+            .map((k) => csvEscape((r as Record<string, unknown>)[k]))
+            .join(",")
         ),
       ].join("\n");
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -209,11 +190,13 @@ export function AdminDashboard() {
     <div className="p-8 max-w-7xl mx-auto">
       <PageHeader
         title="Model metrics"
-        subtitle={summary?.version ? `Production: ${summary.version}` : "Production model"}
+        subtitle={
+          summary?.version ? `Production: ${summary.version}` : "Production model"
+        }
         breadcrumb={["Admin", "Model metrics"]}
         actions={
           <>
-            <Select value={range} onValueChange={(v) => setRange(v as typeof range)}>
+            <Select value={range} onValueChange={(v) => setRange(v as Range)}>
               <SelectTrigger className="h-9 w-[140px]">
                 <SelectValue />
               </SelectTrigger>
@@ -236,296 +219,21 @@ export function AdminDashboard() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {kpis.map((k) => (
-          <div
-            key={k.label}
-            className="rounded-lg border border-border bg-card p-5"
-          >
-            <div className="text-xs text-muted-foreground uppercase tracking-wide mono mb-2">
-              {k.label}
-            </div>
-            <div className="text-3xl font-semibold tracking-tight mono">
-              {k.value}
-            </div>
-            <div
-              className="flex items-center gap-1 text-xs mt-3 pt-3 border-t border-border"
-              style={{
-                color: k.live
-                  ? "hsl(var(--muted-foreground))"
-                  : "hsl(var(--success))",
-              }}
-            >
-              <TrendingUp size={12} /> {k.delta}
-            </div>
-          </div>
+          <KpiTile key={k.label} {...k} />
         ))}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        {[
-          { label: "Accuracy", value: summary?.accuracy != null ? `${(summary.accuracy * 100).toFixed(2)}%` : "—" },
-          { label: "Weighted F1", value: summary?.weighted_f1 != null ? summary.weighted_f1.toFixed(4) : "—" },
-          { label: "Macro AUC (OvR)", value: summary?.macro_auc_ovr != null ? summary.macro_auc_ovr.toFixed(4) : "—" },
-          {
-            label: "Last evaluated",
-            value: summary?.last_trained_at
-              ? new Date(summary.last_trained_at).toISOString().slice(0, 10)
-              : "—",
-          },
-        ].map((m) => (
-          <div key={m.label} className="rounded-lg border border-border bg-card p-4">
-            <div className="text-xs text-muted-foreground uppercase tracking-wide mono mb-1">
-              {m.label}
-            </div>
-            <div className="text-xl font-semibold tracking-tight mono">{m.value}</div>
-          </div>
-        ))}
-      </div>
+      <HeadlineMetricsRow summary={summary} />
 
       <div className="grid gap-5 mb-6 lg:grid-cols-[1.2fr_1fr]">
-        <div className="rounded-lg border border-border bg-card p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-semibold">Confusion matrix</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {(() => {
-                  const n = CM_MAT.reduce((a, r) => a + r.reduce((b, v) => b + v, 0), 0);
-                  return n > 0 ? `Test set · ${n.toLocaleString()} samples · row-normalized %` : "Test set · row-normalized %";
-                })()}
-              </p>
-            </div>
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: `60px repeat(8, 1fr)`,
-              gap: 2,
-            }}
-          >
-            <div />
-            {CM_CLASSES.map((c) => (
-              <div
-                key={c}
-                className="text-xs mono text-muted-foreground text-center py-1"
-              >
-                {c}
-              </div>
-            ))}
-            {CM_MAT.map((row, i) => (
-              <div key={i} style={{ display: "contents" }}>
-                <div className="text-xs mono text-muted-foreground flex items-center justify-end pr-2">
-                  {CM_CLASSES[i]}
-                </div>
-                {row.map((v, j) => {
-                  const total = row.reduce((a, b) => a + b, 0);
-                  const pct = total > 0 ? v / total : 0;
-                  const intensity = Math.min(1, pct * 1.2);
-                  return (
-                    <div
-                      key={j}
-                      className="mono text-xs flex items-center justify-center rounded"
-                      style={{
-                        aspectRatio: 1,
-                        background: `oklch(${0.95 - intensity * 0.55} ${0.02 + intensity * 0.13} 200 / ${0.15 + intensity * 0.85})`,
-                        color:
-                          intensity > 0.5
-                            ? "white"
-                            : "hsl(var(--foreground))",
-                        fontSize: 10,
-                        fontWeight: i === j ? 600 : 400,
-                      }}
-                    >
-                      {Math.round(pct * 100)}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-          <div className="flex items-center justify-between mt-4 text-xs text-muted-foreground">
-            <span>True class ↓ · Predicted class →</span>
-            <div className="flex items-center gap-1">
-              <span className="mono">0%</span>
-              <div
-                style={{
-                  width: 120,
-                  height: 8,
-                  borderRadius: 4,
-                  background:
-                    "linear-gradient(90deg, oklch(0.95 0.02 200 / 0.15), oklch(0.4 0.15 200))",
-                }}
-              />
-              <span className="mono">100%</span>
-            </div>
-          </div>
-        </div>
-
+        <ConfusionMatrixCard confusion={confusion} />
         <div className="flex flex-col gap-5">
-          <div className="rounded-lg border border-border bg-card p-5">
-            <h3 className="font-semibold mb-1">Inference latency</h3>
-            <p className="text-xs text-muted-foreground mb-4">
-              p50 / p95 / p99 over 7 days
-            </p>
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { l: "p50", v: latency ? `${latency.p50_ms}ms` : "—" },
-                { l: "p95", v: latency ? `${latency.p95_ms}ms` : "—" },
-                { l: "p99", v: latency ? `${latency.p99_ms}ms` : "—" },
-              ].map((s) => (
-                <div
-                  key={s.l}
-                  className="text-center p-3 rounded"
-                  style={{ background: "hsl(var(--muted) / 0.5)" }}
-                >
-                  <div className="text-xs text-muted-foreground mb-1 mono">
-                    {s.l}
-                  </div>
-                  <div className="text-xl font-semibold mono">{s.v}</div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 pt-4 border-t border-border flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Throughput</span>
-              <span className="mono font-medium">
-                {latency
-                  ? `${latency.throughput_per_hr.toLocaleString()} req/hr · ${latency.count.toLocaleString()} samples`
-                  : "—"}
-              </span>
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-border bg-card p-5">
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="font-semibold">Drift monitor</h3>
-              <Badge
-                variant="outline"
-                className={
-                  driftBand === "alert"
-                    ? "gap-1 border-destructive/40 text-destructive"
-                    : driftBand === "monitor"
-                      ? "gap-1 border-warning/40 text-warning"
-                      : "gap-1 border-success/40 text-success"
-                }
-              >
-                {driftBand === "alert" ? (
-                  <AlertTriangle size={10} />
-                ) : driftBand === "monitor" ? (
-                  <Eye size={10} />
-                ) : (
-                  <CheckCircle2 size={10} />
-                )}
-                {driftBand === "alert" ? "Alert" : driftBand === "monitor" ? "Monitor" : "Stable"}
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground mb-3">
-              Predicted-class distribution divergence (PSI) vs eval-set reference
-            </p>
-            <div className="h-[100px]">
-              <ResponsiveContainer>
-                <LineChart data={driftCurve} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                  <YAxis domain={[0, 0.5]} hide />
-                  <XAxis dataKey="x" hide />
-                  <Line
-                    type="monotone"
-                    dataKey="y"
-                    stroke="hsl(var(--brand))"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex items-center justify-between mt-2 text-xs">
-              <span className="mono text-muted-foreground">
-                Current PSI: {driftCurrent !== null ? driftCurrent.toFixed(3) : "—"}
-              </span>
-              <span className="mono text-muted-foreground">
-                7d avg: {drift7dAvg !== null ? drift7dAvg.toFixed(3) : "—"}
-              </span>
-            </div>
-          </div>
+          <LatencyCard latency={latency} />
+          <DriftCard drift={drift} />
         </div>
       </div>
 
-      <div className="rounded-lg border border-border bg-card">
-        <div className="p-5 border-b border-border">
-          <h3 className="font-semibold">Per-class performance</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            ISIC 2019 · 8 classes · balanced evaluation
-          </p>
-        </div>
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-border">
-              {["Class", "Precision", "Recall", "F1", "Support", ""].map(
-                (h) => (
-                  <th
-                    key={h}
-                    className="text-left text-xs font-medium text-muted-foreground uppercase tracking-wide px-5 py-3"
-                  >
-                    {h}
-                  </th>
-                )
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {perClass.map((c) => {
-              const color = classColor(c.code);
-              return (
-                <tr key={c.code} className="border-b border-border last:border-0">
-                  <td className="px-5 py-3">
-                    <div className="flex items-center gap-2">
-                      <div
-                        style={{
-                          width: 10,
-                          height: 10,
-                          borderRadius: 2,
-                          background: color,
-                        }}
-                      />
-                      <span className="font-medium text-sm">
-                        {className(c.code)}
-                      </span>
-                      <span className="mono text-xs text-muted-foreground">
-                        {c.code}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-5 py-3 mono text-sm">
-                    {c.precision.toFixed(3)}
-                  </td>
-                  <td className="px-5 py-3 mono text-sm">
-                    {c.recall.toFixed(3)}
-                  </td>
-                  <td className="px-5 py-3 mono text-sm">{c.f1.toFixed(3)}</td>
-                  <td className="px-5 py-3 mono text-sm text-muted-foreground">
-                    {c.support}
-                  </td>
-                  <td className="px-5 py-3">
-                    <div
-                      style={{
-                        width: 120,
-                        height: 6,
-                        background: "hsl(var(--muted))",
-                        borderRadius: 3,
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${c.f1 * 100}%`,
-                          height: "100%",
-                          background: color,
-                          borderRadius: 3,
-                        }}
-                      />
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <PerClassTable perClass={perClass} />
     </div>
   );
 }
