@@ -45,8 +45,17 @@ export function AdminAuditLog() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [actionFilter, setActionFilter] = useState<string>("all");
-  const [exportRange, setExportRange] = useState<"7d" | "30d" | "90d" | "all">("30d");
+  const [range, setRange] = useState<"7d" | "30d" | "90d" | "all">("30d");
   const [exporting, setExporting] = useState(false);
+
+  const rangeSinceIso = (r: "7d" | "30d" | "90d" | "all"): string | null => {
+    if (r === "all") return null;
+    const d = new Date();
+    if (r === "7d") d.setDate(d.getDate() - 7);
+    else if (r === "30d") d.setDate(d.getDate() - 30);
+    else d.setDate(d.getDate() - 90);
+    return d.toISOString();
+  };
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -71,6 +80,8 @@ export function AdminAuditLog() {
         .order("created_at", { ascending: false })
         .range(from, to);
       if (actionFilter !== "all") query = query.eq("action", actionFilter);
+      const since = rangeSinceIso(range);
+      if (since) query = query.gte("created_at", since);
       if (debouncedSearch) {
         const esc = debouncedSearch.replace(/[,%()]/g, "");
         if (esc) {
@@ -109,7 +120,7 @@ export function AdminAuditLog() {
       setLoading(false);
     };
     void load();
-  }, [page, actionFilter, debouncedSearch]);
+  }, [page, actionFilter, debouncedSearch, range]);
 
   const filtered = rows;
 
@@ -126,9 +137,9 @@ export function AdminAuditLog() {
       const supabase = createClient();
       const now = new Date();
       const from = new Date(now);
-      if (exportRange === "7d") from.setDate(from.getDate() - 7);
-      else if (exportRange === "30d") from.setDate(from.getDate() - 30);
-      else if (exportRange === "90d") from.setDate(from.getDate() - 90);
+      if (range === "7d") from.setDate(from.getDate() - 7);
+      else if (range === "30d") from.setDate(from.getDate() - 30);
+      else if (range === "90d") from.setDate(from.getDate() - 90);
       else from.setFullYear(from.getFullYear() - 5);
 
       const { data, error } = await supabase.rpc("admin_export_audit_logs", {
@@ -161,7 +172,7 @@ export function AdminAuditLog() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `audit-${exportRange}-${now.toISOString().slice(0, 10)}.csv`;
+      a.download = `audit-${range}-${now.toISOString().slice(0, 10)}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -210,8 +221,11 @@ export function AdminAuditLog() {
           </Tabs>
           <div className="flex items-center gap-2 ml-auto">
             <Select
-              value={exportRange}
-              onValueChange={(v) => setExportRange(v as typeof exportRange)}
+              value={range}
+              onValueChange={(v) => {
+                setRange(v as typeof range);
+                setPage(1);
+              }}
             >
               <SelectTrigger className="h-9 w-[120px]">
                 <SelectValue />
