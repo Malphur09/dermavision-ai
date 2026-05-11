@@ -210,7 +210,7 @@ export function DiagnosisResults() {
   }, [paramCaseId]);
 
   const handleMarkReviewed = async () => {
-    if (!caseData || status === "reviewed" || status === "complete") return;
+    if (!caseData || status === "reviewed") return;
     setSavingReview(true);
     const supabase = createClient();
     const { error } = await supabase
@@ -356,12 +356,10 @@ export function DiagnosisResults() {
             <Button
               variant="brand"
               onClick={handleMarkReviewed}
-              disabled={
-                savingReview || status === "reviewed" || status === "complete"
-              }
+              disabled={savingReview || status === "reviewed"}
             >
               <Check size={14} />
-              {status === "reviewed" || status === "complete"
+              {status === "reviewed"
                 ? "Reviewed"
                 : savingReview
                   ? "Saving…"
