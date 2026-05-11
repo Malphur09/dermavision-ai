@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT))
 from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, service_headers  # noqa: E402
 
 BUCKET = "dermoscopic-images"
+HEATMAPS_BUCKET = "heatmaps"
 SEED_PREFIX = "seed-"
 DATASET_DIR = Path("/models")
 IMAGES_DIR = DATASET_DIR / "ISIC_2019_Test_Input"
@@ -76,9 +77,9 @@ ARABIC_FEMALE = [
 ]
 
 
-def storage_upload(token_path: str, content: bytes, content_type: str) -> None:
+def storage_upload(token_path: str, content: bytes, content_type: str, bucket: str = BUCKET) -> None:
     resp = requests.post(
-        f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{token_path}",
+        f"{SUPABASE_URL}/storage/v1/object/{bucket}/{token_path}",
         headers={
             "apikey": SUPABASE_SERVICE_ROLE_KEY,
             "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
@@ -92,9 +93,9 @@ def storage_upload(token_path: str, content: bytes, content_type: str) -> None:
         raise RuntimeError(f"upload failed {resp.status_code}: {resp.text[:200]}")
 
 
-def storage_list(prefix: str) -> list[dict]:
+def storage_list(prefix: str, bucket: str = BUCKET) -> list[dict]:
     resp = requests.post(
-        f"{SUPABASE_URL}/storage/v1/object/list/{BUCKET}",
+        f"{SUPABASE_URL}/storage/v1/object/list/{bucket}",
         headers=service_headers(),
         json={"prefix": prefix, "limit": 1000},
         timeout=15,
@@ -104,12 +105,12 @@ def storage_list(prefix: str) -> list[dict]:
     return resp.json() or []
 
 
-def storage_remove(paths: list[str]) -> None:
+def storage_remove(paths: list[str], bucket: str = BUCKET) -> None:
     if not paths:
         return
     requests.request(
         "DELETE",
-        f"{SUPABASE_URL}/storage/v1/object/{BUCKET}",
+        f"{SUPABASE_URL}/storage/v1/object/{bucket}",
         headers=service_headers(),
         json={"prefixes": paths},
         timeout=30,
@@ -235,6 +236,7 @@ def main() -> int:
     parser.add_argument("--cases", type=int, default=12)
     parser.add_argument("--clean", action="store_true", help="wipe prior seed rows + images for this doctor first")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--gradcam", action="store_true", help="also generate + upload Grad-CAM overlays via PthBackend")
     args = parser.parse_args()
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
@@ -253,11 +255,12 @@ def main() -> int:
         print(f"[clean] removing prior seed rows + images for doctor {args.doctor}")
         rest_delete("cases", {"doctor_id": f"eq.{args.doctor}", "notes": "like.*SEED*"})
         rest_delete("patients", {"created_by": f"eq.{args.doctor}", "patient_id": "like.SEED-*"})
-        listed = storage_list(f"{args.doctor}/{SEED_PREFIX}")
-        paths = [f"{args.doctor}/{o['name']}" for o in listed if o.get("name", "").startswith(SEED_PREFIX)]
-        if paths:
-            storage_remove(paths)
-            print(f"[clean] removed {len(paths)} storage objects")
+        for bkt in (BUCKET, HEATMAPS_BUCKET):
+            listed = storage_list(f"{args.doctor}/{SEED_PREFIX}", bucket=bkt)
+            paths = [f"{args.doctor}/{o['name']}" for o in listed if o.get("name", "").startswith(SEED_PREFIX)]
+            if paths:
+                storage_remove(paths, bucket=bkt)
+                print(f"[clean] removed {len(paths)} objects from {bkt}")
 
     print("[1/4] Loading ground truth")
     gt = load_ground_truth()
@@ -273,6 +276,25 @@ def main() -> int:
     inserted_patients = rest_post("patients", patients)
     print(f"      inserted {len(inserted_patients)}")
 
+    backend = None
+    show_cam_on_image = None
+    preprocess_bytes = None
+    if args.gradcam:
+        print("[4/4 pre] Loading PthBackend for Grad-CAM")
+        from api.pth_backend import load_pth  # noqa: WPS433
+        from api.preprocess import preprocess_bytes as _preprocess_bytes  # noqa: WPS433
+        from pytorch_grad_cam.utils.image import show_cam_on_image as _show_cam_on_image  # noqa: WPS433
+        from PIL import Image as _Image  # noqa: WPS433
+        import io as _io  # noqa: WPS433
+
+        pth_path = os.getenv("PTH_MODEL_PATH", "/models/dermavision_ensemble_3way.pth")
+        if not Path(pth_path).is_file():
+            print(f"ERROR: PTH model not at {pth_path}", file=sys.stderr)
+            return 2
+        backend = load_pth(pth_path)
+        preprocess_bytes = _preprocess_bytes
+        show_cam_on_image = _show_cam_on_image
+
     print(f"[4/4] Uploading images + inserting {len(picks)} cases")
     cases: list[dict] = []
     now = datetime.now(timezone.utc)
@@ -282,6 +304,20 @@ def main() -> int:
         storage_name = f"{SEED_PREFIX}{uuid.uuid4().hex[:12]}.jpg"
         storage_path = f"{args.doctor}/{storage_name}"
         storage_upload(storage_path, data, "image/jpeg")
+
+        heatmap_path: Optional[str] = None
+        if backend is not None and preprocess_bytes is not None and show_cam_on_image is not None:
+            from PIL import Image as _Image
+            import io as _io
+
+            tensor, rgb_float = preprocess_bytes(data, size=384)
+            gray = backend.gradcam(tensor)
+            overlay = show_cam_on_image(rgb_float, gray, use_rgb=True)
+            buf = _io.BytesIO()
+            _Image.fromarray(overlay).save(buf, format="PNG")
+            heatmap_path = f"{args.doctor}/{SEED_PREFIX}{uuid.uuid4().hex[:12]}.png"
+            storage_upload(heatmap_path, buf.getvalue(), "image/png", bucket=HEATMAPS_BUCKET)
+
         pred_class, probs, conf = simulate_prediction(true_code, rng)
         patient = inserted_patients[i % len(inserted_patients)]
         created_at = now - timedelta(days=rng.randint(0, 28), hours=rng.randint(0, 23))
@@ -290,6 +326,7 @@ def main() -> int:
             "doctor_id": args.doctor,
             "lesion_site": rng.choice(LESION_SITES),
             "image_url": storage_path,
+            "gradcam_url": heatmap_path,
             "predicted_class": pred_class,
             "confidence": conf,
             "probabilities": probs,
@@ -298,6 +335,8 @@ def main() -> int:
             "notes": "[SEED]",
             "created_at": created_at.isoformat(),
         })
+        if backend is not None:
+            print(f"      [{i+1}/{len(picks)}] image + heatmap uploaded")
     rest_post("cases", cases)
     print(f"      inserted {len(cases)} cases")
 
