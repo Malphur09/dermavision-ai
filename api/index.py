@@ -56,16 +56,7 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(reports_bp)
 app.register_blueprint(model_lifecycle_bp)
 
-CLASSES = [
-    "Melanoma",
-    "Melanocytic Nevus",
-    "Basal Cell Carcinoma",
-    "Actinic Keratosis",
-    "Benign Keratosis",
-    "Dermatofibroma",
-    "Vascular Lesion",
-    "Squamous Cell Carcinoma",
-]
+from api.classes import ISIC_FULL as CLASSES  # noqa: E402
 
 MODEL_PATH = os.getenv("MODEL_PATH", "efficientnetb4_isic2019.onnx")
 

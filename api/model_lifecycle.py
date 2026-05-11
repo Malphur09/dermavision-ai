@@ -17,12 +17,17 @@ from typing import Any, Optional
 
 import onnx
 import onnx2torch
-import requests
 import torch
 from flask import Blueprint, jsonify, request
 
-from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, require_admin, service_headers
+from api._auth import require_admin
 from api.metrics import _rest_get, ingest_metrics
+from api.supabase import (
+    rest_patch as _rest_patch_lib,
+    rest_post as _rest_post_lib,
+    storage_get,
+    storage_upload as _storage_upload_lib,
+)
 from api import eval_set
 
 model_lifecycle_bp = Blueprint("model_lifecycle", __name__, url_prefix="/api")
@@ -36,42 +41,12 @@ BENCH_RUNS = 20
 # ---------- Storage helpers ----------
 
 def _storage_download(path: str) -> Optional[bytes]:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{path}",
-            headers={
-                "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            },
-            timeout=120,
-        )
-        if resp.status_code != 200:
-            return None
-        return resp.content
-    except Exception:
-        return None
+    return storage_get(BUCKET, path, timeout=120)
 
 
 def _storage_upload(path: str, data: bytes, content_type: str = "application/octet-stream") -> bool:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return False
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{path}",
-            data=data,
-            headers={
-                "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-                "Content-Type": content_type,
-                "x-upsert": "true",
-            },
-            timeout=120,
-        )
-        return resp.status_code in (200, 201)
-    except Exception:
-        return False
+    resp = _storage_upload_lib(BUCKET, path, data, content_type, timeout=120)
+    return bool(resp and resp.status_code in (200, 201))
 
 
 def _storage_copy(src: str, dst: str) -> bool:
@@ -88,36 +63,14 @@ def _storage_copy(src: str, dst: str) -> bool:
 
 
 def _rest_patch(path: str, params: dict, body: dict) -> bool:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return False
-    try:
-        resp = requests.patch(
-            f"{SUPABASE_URL}/rest/v1/{path}",
-            params=params,
-            json=body,
-            headers={**service_headers(), "Prefer": "return=minimal"},
-            timeout=5,
-        )
-        return resp.status_code in (200, 204)
-    except Exception:
-        return False
+    return _rest_patch_lib(path, params, body)
 
 
 def _rest_post(path: str, body: Any, prefer: str = "return=representation") -> Optional[Any]:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    resp = _rest_post_lib(path, body, prefer_minimal=(prefer == "return=minimal"))
+    if not resp or resp.status_code not in (200, 201):
         return None
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/{path}",
-            json=body,
-            headers={**service_headers(), "Prefer": prefer},
-            timeout=10,
-        )
-        if resp.status_code not in (200, 201):
-            return None
-        return resp.json() if resp.text else None
-    except Exception:
-        return None
+    return resp.json() if resp.text else None
 
 
 # ---------- ONNX helpers ----------

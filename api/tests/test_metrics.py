@@ -111,16 +111,18 @@ def test_ingest_metrics_filters_unknown_keys():
     class FakeResp:
         status_code = 201
 
-    def fake_post(url, json, headers, timeout):
-        captured["json"] = json
+    def fake_post(path, body, prefer_minimal=False, timeout=None):
+        captured["path"] = path
+        captured["body"] = body
         return FakeResp()
 
-    with patch("api.metrics.requests.post", side_effect=fake_post):
+    with patch("api.metrics.rest_post", side_effect=fake_post):
         ok = ingest_metrics("v-uuid", {
             "summary": {"balanced_acc": 0.9},
             "garbage_key": {"x": 1},
             "per_class": [{"code": "MEL"}],
         })
     assert ok is True
-    keys = {row["metric_key"] for row in captured["json"]}
+    assert captured["path"] == "model_metrics"
+    keys = {row["metric_key"] for row in captured["body"]}
     assert keys == {"summary", "per_class"}

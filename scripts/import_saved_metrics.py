@@ -21,17 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-CLASSES = [
-    {"code": "MEL", "full": "Melanoma"},
-    {"code": "NV", "full": "Melanocytic Nevus"},
-    {"code": "BCC", "full": "Basal Cell Carcinoma"},
-    {"code": "AK", "full": "Actinic Keratosis"},
-    {"code": "BKL", "full": "Benign Keratosis"},
-    {"code": "DF", "full": "Dermatofibroma"},
-    {"code": "VASC", "full": "Vascular Lesion"},
-    {"code": "SCC", "full": "Squamous Cell Carcinoma"},
-]
-N_CLASSES = len(CLASSES)
+from api.classes import ISIC_CLASSES as CLASSES, N_CLASSES  # noqa: E402
 
 
 def per_class_prf(cm: np.ndarray) -> list[dict]:

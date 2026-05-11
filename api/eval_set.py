@@ -20,11 +20,10 @@ import time
 from typing import Iterator, Optional
 
 import numpy as np
-import requests
 import torch
 from PIL import Image
 
-from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
+from api.supabase import storage_get
 
 BUCKET = "model-uploads"
 MANIFEST_PATH = "eval-set/manifest.json"
@@ -32,41 +31,14 @@ LABELS_PATH = "eval-set/labels.csv"
 IMAGES_PREFIX = "eval-set/images/"
 MANIFEST_TTL_S = 300
 
-# Same order as the model output. Code aliases let labels.csv accept either form.
-CLASSES = [
-    {"idx": 0, "code": "MEL", "full": "Melanoma"},
-    {"idx": 1, "code": "NV", "full": "Melanocytic Nevus"},
-    {"idx": 2, "code": "BCC", "full": "Basal Cell Carcinoma"},
-    {"idx": 3, "code": "AK", "full": "Actinic Keratosis"},
-    {"idx": 4, "code": "BKL", "full": "Benign Keratosis"},
-    {"idx": 5, "code": "DF", "full": "Dermatofibroma"},
-    {"idx": 6, "code": "VASC", "full": "Vascular Lesion"},
-    {"idx": 7, "code": "SCC", "full": "Squamous Cell Carcinoma"},
-]
-N_CLASSES = len(CLASSES)
-_LABEL_TO_IDX = {c["code"]: c["idx"] for c in CLASSES}
-_LABEL_TO_IDX.update({c["full"]: c["idx"] for c in CLASSES})
+# Class ordering + label→idx map live in api.classes (single source of truth).
+from api.classes import ISIC_CLASSES as CLASSES, LABEL_TO_IDX as _LABEL_TO_IDX, N_CLASSES  # noqa: E402
 
 _manifest_cache: dict = {"value": None, "ts": 0.0}
 
 
 def _storage_get(path: str) -> Optional[bytes]:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{path}",
-            headers={
-                "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            },
-            timeout=60,
-        )
-        if resp.status_code != 200:
-            return None
-        return resp.content
-    except Exception:
-        return None
+    return storage_get(BUCKET, path, timeout=60)
 
 
 def load_manifest() -> Optional[dict]:
@@ -184,8 +156,9 @@ def _detect_and_parse(raw: bytes) -> list[tuple[str, int]]:
     """Try ISIC ground-truth shape first; fall back to filename,label."""
     reader = csv.DictReader(io.StringIO(raw.decode("utf-8")))
     fields = set(reader.fieldnames or [])
-    isic_codes = {"MEL", "NV", "BCC", "AK", "BKL", "DF", "VASC", "SCC"}
-    if isic_codes.issubset(fields):
+    from api.classes import ISIC_CODES
+
+    if set(ISIC_CODES).issubset(fields):
         return _parse_isic_ground_truth(raw)
     return _parse_simple_labels_csv(raw)
 

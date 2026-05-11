@@ -43,26 +43,7 @@ DATASET_DIR = Path("/models")
 IMAGES_DIR = DATASET_DIR / "ISIC_2019_Test_Input"
 GROUND_TRUTH = DATASET_DIR / "ISIC_2019_Test_GroundTruth.csv"
 
-CODE_TO_FULL = {
-    "MEL": "Melanoma",
-    "NV": "Melanocytic Nevus",
-    "BCC": "Basal Cell Carcinoma",
-    "AK": "Actinic Keratosis",
-    "BKL": "Benign Keratosis",
-    "DF": "Dermatofibroma",
-    "VASC": "Vascular Lesion",
-    "SCC": "Squamous Cell Carcinoma",
-}
-RISK_LEVEL = {
-    "Melanoma": "High Risk",
-    "Squamous Cell Carcinoma": "High Risk",
-    "Basal Cell Carcinoma": "High Risk",
-    "Actinic Keratosis": "Moderate Risk",
-    "Melanocytic Nevus": "Benign",
-    "Benign Keratosis": "Benign",
-    "Dermatofibroma": "Benign",
-    "Vascular Lesion": "Benign",
-}
+from api.classes import CODE_TO_FULL, RISK_LEVEL  # noqa: E402
 LESION_SITES = ["back", "arm", "leg", "chest", "shoulder", "abdomen", "face", "scalp", "hand", "foot"]
 
 ARABIC_MALE = [

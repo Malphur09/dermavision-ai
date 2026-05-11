@@ -12,59 +12,12 @@ real metrics pipeline ingests a training artifact.
 from typing import Any, Optional
 
 import numpy as np
-import requests
 from flask import Blueprint, jsonify
 
-from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, service_headers
+from api.classes import ISIC_CLASSES
+from api.supabase import rest_get as _rest_get, rest_post, rpc as _rpc
 
 metrics_bp = Blueprint("metrics", __name__, url_prefix="/api")
-
-ISIC_CLASSES = [
-    {"code": "MEL", "full": "Melanoma"},
-    {"code": "NV", "full": "Melanocytic Nevus"},
-    {"code": "BCC", "full": "Basal Cell Carcinoma"},
-    {"code": "AK", "full": "Actinic Keratosis"},
-    {"code": "BKL", "full": "Benign Keratosis"},
-    {"code": "DF", "full": "Dermatofibroma"},
-    {"code": "VASC", "full": "Vascular Lesion"},
-    {"code": "SCC", "full": "Squamous Cell Carcinoma"},
-]
-
-
-# ---------- Supabase helpers ----------
-
-def _rest_get(path: str, params: Optional[dict] = None) -> Any:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/rest/v1/{path}",
-            params=params or {},
-            headers=service_headers(),
-            timeout=5,
-        )
-        if resp.status_code != 200:
-            return None
-        return resp.json()
-    except Exception:
-        return None
-
-
-def _rpc(fn: str, body: Optional[dict] = None) -> Any:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/{fn}",
-            json=body or {},
-            headers=service_headers(),
-            timeout=5,
-        )
-        if resp.status_code != 200:
-            return None
-        return resp.json()
-    except Exception:
-        return None
 
 
 def _active_version() -> Optional[dict]:
@@ -346,8 +299,6 @@ def ingest_metrics(version_id: str, metrics_json: dict) -> bool:
             "drift": { window, values }
         }
     """
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return False
     rows = [
         {"version_id": version_id, "metric_key": k, "metric_value": v}
         for k, v in metrics_json.items()
@@ -355,34 +306,16 @@ def ingest_metrics(version_id: str, metrics_json: dict) -> bool:
     ]
     if not rows:
         return True
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/model_metrics",
-            json=rows,
-            headers={**service_headers(), "Prefer": "return=minimal"},
-            timeout=10,
-        )
-        return resp.status_code in (200, 201, 204)
-    except Exception:
-        return False
+    resp = rest_post("model_metrics", rows, prefer_minimal=True)
+    return bool(resp and resp.status_code in (200, 201, 204))
 
 
 def insert_telemetry(case_id: Optional[str], latency_ms: int) -> None:
     """Non-blocking insert into inference_telemetry. Never raises."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return
     version = _active_version()
     body = {
         "case_id": case_id,
         "version_id": version["id"] if version else None,
         "latency_ms": int(max(0, latency_ms)),
     }
-    try:
-        requests.post(
-            f"{SUPABASE_URL}/rest/v1/inference_telemetry",
-            json=body,
-            headers={**service_headers(), "Prefer": "return=minimal"},
-            timeout=2,
-        )
-    except Exception:
-        pass
+    rest_post("inference_telemetry", body, prefer_minimal=True, timeout=2.0)
