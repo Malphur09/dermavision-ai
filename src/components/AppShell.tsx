@@ -156,8 +156,19 @@ export function AppShell({
     router.push(path);
   };
 
-  const isActive = (path: string) =>
-    pathname === path || pathname.startsWith(path + "/");
+  // Pick the longest nav prefix that matches the current path. Prevents a
+  // parent route like /admin from lighting up when /admin/audit is active,
+  // since /admin/audit is the more specific match.
+  const activePath = (() => {
+    let best = "";
+    for (const item of nav) {
+      if (pathname === item.path || pathname.startsWith(item.path + "/")) {
+        if (item.path.length > best.length) best = item.path;
+      }
+    }
+    return best;
+  })();
+  const isActive = (path: string) => path === activePath;
 
   const SidebarContent = () => (
     <>
