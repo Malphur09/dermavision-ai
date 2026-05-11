@@ -1,7 +1,13 @@
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Undo2 } from "lucide-react";
 
 import { Avatar } from "@/components/primitives/Avatar";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 import { STATUS_META } from "./constants";
 
@@ -10,13 +16,18 @@ export function PatientCard({
   label,
   lesionSite,
   status,
+  onReopen,
+  reopening,
 }: {
   name: string;
   label: string;
   lesionSite: string;
   status: string;
+  onReopen?: () => void;
+  reopening?: boolean;
 }) {
   const meta = STATUS_META[status] ?? STATUS_META.pending;
+  const canReopen = status === "reviewed" && typeof onReopen === "function";
   return (
     <div className="rounded-lg border border-border bg-card p-5">
       <div className="flex items-center gap-3 mb-4">
@@ -25,9 +36,25 @@ export function PatientCard({
           <div className="font-semibold truncate">{name}</div>
           <div className="text-xs text-muted-foreground mono truncate">{label}</div>
         </div>
-        <Button variant="ghost" size="icon">
-          <MoreHorizontal size={14} />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label="Case actions">
+              <MoreHorizontal size={14} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              disabled={!canReopen || reopening}
+              onSelect={(e) => {
+                e.preventDefault();
+                if (canReopen && !reopening) onReopen?.();
+              }}
+            >
+              <Undo2 size={12} />
+              {reopening ? "Reopening…" : "Reopen as pending"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div className="grid grid-cols-2 gap-3 text-sm">
         <div>

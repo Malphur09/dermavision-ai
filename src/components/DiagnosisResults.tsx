@@ -231,6 +231,28 @@ export function DiagnosisResults() {
     });
   };
 
+  const handleReopen = async () => {
+    if (!caseData || status !== "reviewed" || savingReview) return;
+    setSavingReview(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("cases")
+      .update({ status: "pending" })
+      .eq("id", caseData.caseId);
+    setSavingReview(false);
+    if (error) {
+      toast.error("Failed to reopen case");
+      return;
+    }
+    setStatus("pending");
+    toast.success("Case reopened — back to pending review");
+    void logPhiAccess({
+      resource_type: "case",
+      resource_id: caseData.caseId,
+      action: "reopened",
+    });
+  };
+
   const handleSaveNotes = async () => {
     if (!caseData || notes === initialNotes || savingNotes) return;
     setSavingNotes(true);
@@ -405,6 +427,8 @@ export function DiagnosisResults() {
             label={patientLabel}
             lesionSite={caseData.lesionSite}
             status={status}
+            onReopen={handleReopen}
+            reopening={savingReview}
           />
           <NextStepsCard steps={nextSteps} />
           <NotesCard
