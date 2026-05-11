@@ -456,7 +456,7 @@ export function DoctorDashboard() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => router.push("/records")}
+                    onClick={() => router.push(`/results?caseId=${p.id}`)}
                   >
                     Open
                   </Button>
