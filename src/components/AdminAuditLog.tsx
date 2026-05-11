@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, Download, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -37,13 +38,15 @@ const ACTION_COLOR: Record<string, string> = {
 };
 
 export function AdminAuditLog() {
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get("q") ?? "";
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState(initialQuery);
+  const [debouncedSearch, setDebouncedSearch] = useState(initialQuery);
   const [actionFilter, setActionFilter] = useState<string>("all");
   const [range, setRange] = useState<"7d" | "30d" | "90d" | "all">("30d");
   const [exporting, setExporting] = useState(false);

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Download, FileText, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -55,6 +55,7 @@ interface Kpis {
 }
 
 export function PatientOversight() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const [riskFilter, setRiskFilter] = useState<"all" | RiskBucket>("all");
@@ -202,8 +203,8 @@ export function PatientOversight() {
         subtitle="Aggregate patient records across all clinicians · read-only audit view"
         breadcrumb={["Admin", "Patient oversight"]}
         actions={
-          <Button variant="outline">
-            <Download size={14} /> Export audit log
+          <Button variant="outline" onClick={() => router.push("/admin/audit")}>
+            <Download size={14} /> Audit log
           </Button>
         }
       />
@@ -343,7 +344,16 @@ export function PatientOversight() {
                         {p.lastVisit ?? "—"}
                       </td>
                       <td className="px-5 py-3">
-                        <Button variant="ghost" size="sm">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            router.push(
+                              `/admin/audit?q=${encodeURIComponent(p.id)}`
+                            )
+                          }
+                          title="View this patient's audit trail"
+                        >
                           <FileText size={12} /> Log
                         </Button>
                       </td>
