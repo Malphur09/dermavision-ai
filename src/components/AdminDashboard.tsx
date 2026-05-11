@@ -196,20 +196,34 @@ export function AdminDashboard() {
         breadcrumb={["Admin", "Model metrics"]}
         actions={
           <>
-            <Select value={range} onValueChange={(v) => setRange(v as Range)}>
-              <SelectTrigger className="h-9 w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="24h">Last 24h</SelectItem>
-                <SelectItem value="7d">Last 7 days</SelectItem>
-                <SelectItem value="30d">Last 30 days</SelectItem>
-                <SelectItem value="all">All time</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline" onClick={handleExport} disabled={exporting}>
-              <Download size={14} /> {exporting ? "Exporting…" : "Export"}
-            </Button>
+            <div
+              className="inline-flex items-center gap-2 rounded-md border border-border bg-card pl-3 pr-1 h-9"
+              title="Time window applied to the CSV export below"
+            >
+              <span className="text-xs text-muted-foreground mono uppercase tracking-wide">
+                Export
+              </span>
+              <Select value={range} onValueChange={(v) => setRange(v as Range)}>
+                <SelectTrigger className="h-7 w-[120px] border-0 shadow-none focus:ring-0">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="24h">Last 24h</SelectItem>
+                  <SelectItem value="7d">Last 7 days</SelectItem>
+                  <SelectItem value="30d">Last 30 days</SelectItem>
+                  <SelectItem value="all">All time</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleExport}
+                disabled={exporting}
+                className="h-7 px-2"
+              >
+                <Download size={14} /> {exporting ? "Exporting…" : "Export"}
+              </Button>
+            </div>
             <Button variant="brand" onClick={() => router.push("/admin/publish")}>
               <Upload size={14} /> New model version
             </Button>
