@@ -14,11 +14,14 @@ Return values:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import requests
 
 from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, service_headers
+
+log = logging.getLogger("api.supabase")
 
 DEFAULT_TIMEOUT = 5.0
 WRITE_TIMEOUT = 10.0
@@ -27,6 +30,11 @@ STORAGE_TIMEOUT = 30.0
 
 def _ready() -> bool:
     return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+
+
+def _log_failure(op: str, exc: Exception) -> None:
+    """Emit one structured warning so a failure does not vanish silently."""
+    log.warning("supabase %s failed: %s: %s", op, exc.__class__.__name__, exc)
 
 
 # ---------- /rest/v1/<table> ----------
@@ -44,7 +52,8 @@ def rest_get(path: str, params: Optional[dict] = None, timeout: float = DEFAULT_
         if resp.status_code != 200:
             return None
         return resp.json()
-    except Exception:
+    except Exception as e:
+        _log_failure(f"GET rest/v1/{path}", e)
         return None
 
 
@@ -60,7 +69,8 @@ def rest_patch(path: str, params: dict, body: dict, timeout: float = DEFAULT_TIM
             timeout=timeout,
         )
         return resp.status_code in (200, 204)
-    except Exception:
+    except Exception as e:
+        _log_failure(f"PATCH rest/v1/{path}", e)
         return False
 
 
@@ -79,7 +89,8 @@ def rest_post(path: str, body: Any, *, prefer_minimal: bool = False, timeout: fl
             headers=headers,
             timeout=timeout,
         )
-    except Exception:
+    except Exception as e:
+        _log_failure(f"POST rest/v1/{path}", e)
         return None
 
 
@@ -96,7 +107,8 @@ def rpc(fn: str, body: Optional[dict] = None, timeout: float = DEFAULT_TIMEOUT) 
         if resp.status_code != 200:
             return None
         return resp.json()
-    except Exception:
+    except Exception as e:
+        _log_failure(f"RPC {fn}", e)
         return None
 
 
@@ -117,7 +129,8 @@ def storage_get(bucket: str, path: str, timeout: float = STORAGE_TIMEOUT) -> Opt
         if resp.status_code != 200:
             return None
         return resp.content
-    except Exception:
+    except Exception as e:
+        _log_failure(f"GET storage/{bucket}/{path}", e)
         return None
 
 
@@ -146,7 +159,8 @@ def storage_upload(
             data=content,
             timeout=timeout,
         )
-    except Exception:
+    except Exception as e:
+        _log_failure(f"POST storage/{bucket}/{path}", e)
         return None
 
 
@@ -163,7 +177,8 @@ def storage_list(bucket: str, prefix: str = "", limit: int = 1000, timeout: floa
         if resp.status_code != 200:
             return []
         return resp.json() or []
-    except Exception:
+    except Exception as e:
+        _log_failure(f"LIST storage/{bucket}", e)
         return []
 
 
@@ -179,7 +194,8 @@ def storage_remove(bucket: str, paths: list[str], timeout: float = STORAGE_TIMEO
             timeout=timeout,
         )
         return resp.status_code in (200, 204)
-    except Exception:
+    except Exception as e:
+        _log_failure(f"DELETE storage/{bucket}", e)
         return False
 
 
@@ -200,5 +216,6 @@ def storage_sign(bucket: str, path: str, expires_in: int = 3600, timeout: float 
         if not signed:
             return None
         return f"{SUPABASE_URL}/storage/v1{signed}" if signed.startswith("/") else signed
-    except Exception:
+    except Exception as e:
+        _log_failure(f"SIGN storage/{bucket}/{path}", e)
         return None
