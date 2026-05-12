@@ -47,8 +47,11 @@ Thumbs.db
 CLAUDE.md
 .claude/
 
-# Supabase
-supabase/
+# Supabase — keep the tracked schema snapshot, ignore everything else the CLI generates
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+supabase/.env.local
 .mcp.json
 
 # Test / coverage artifacts
