@@ -1,35 +1,21 @@
 # DermaVision AI
 
-AI-powered multi-class skin lesion classification using EfficientNetB4 and Grad-CAM interpretability, built for clinical decision support.
+Clinical decision-support web app for dermoscopic skin lesion analysis.
 
-## Stack
+- 8-class ISIC prediction with confidence + Grad-CAM overlay
+- Doctor sign-off workflow with PDF/JSON report export
+- Admin model metrics, version management, and PHI audit log
+- 3-way PyTorch ensemble (B4 + B4 + ConvNeXt-Base) at 88.8% balanced accuracy
 
-- **Frontend** — Next.js + TypeScript + Tailwind CSS + shadcn/ui
-- **Backend** — Flask + PyTorch + pytorch-grad-cam
-- **Model** — EfficientNetB4 trained on ISIC 2019 (8 classes)
+## Install
 
-## Project Structure
-
-```
-dermavision-ai/
-├── src/                # Next.js app
-├── api/                # Flask API
-├── Dockerfile.web      # Next.js container
-├── Dockerfile.api      # Flask container
-└── docker-compose.yaml # Local dev orchestration
+```bash
+git clone https://github.com/Malphur09/dermavision-ai.git
+cd dermavision-ai
+cp .env.example .env       # fill in Supabase + service-role keys
+docker compose up --build  # web on :3000, Flask internal on :5328
 ```
 
-## Getting Started (Docker)
+Web app at <http://localhost:3000>.
 
-1. Copy environment template:
-   ```bash
-   cp .env.example .env
-   ```
-2. Fill in Supabase values in `.env`.
-3. Start both services:
-   ```bash
-   docker compose up --build
-   ```
-
-The web app will be available at `http://localhost:3000`.  
-Next.js forwards `/api/*` requests to the Flask service over the Docker network via `http://api:5328`.
+Schema apply, bucket setup, model artifact, and first-admin steps are in [`docs/`](docs/).

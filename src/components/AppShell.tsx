@@ -40,6 +40,7 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
+import type { ModelVersion } from "@/lib/api-types";
 
 export type NavItem = {
   path: string;
@@ -68,17 +69,28 @@ export function AppShell({
   const [suggestOpen, setSuggestOpen] = useState(false);
   const searchWrapRef = useRef<HTMLDivElement>(null);
 
-  type ModelVersion = {
-    version: string;
-    status: string;
-    architecture?: string | null;
-    params?: string | null;
-    notes?: string | null;
-    date?: string | null;
-  };
   const [modelOpen, setModelOpen] = useState(false);
   const [activeModel, setActiveModel] = useState<ModelVersion | null>(null);
   const [modelLoading, setModelLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/model/versions");
+        const json = await res.json();
+        const prod = (json.versions ?? []).find(
+          (v: ModelVersion) => v.status === "production"
+        );
+        if (!cancelled) setActiveModel(prod ?? (json.versions ?? [])[0] ?? null);
+      } catch {
+        // sidebar falls back to neutral copy
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const patientTarget = role === "admin" ? "/admin/patients" : "/records";
 
@@ -144,8 +156,19 @@ export function AppShell({
     router.push(path);
   };
 
-  const isActive = (path: string) =>
-    pathname === path || pathname.startsWith(path + "/");
+  // Pick the longest nav prefix that matches the current path. Prevents a
+  // parent route like /admin from lighting up when /admin/audit is active,
+  // since /admin/audit is the more specific match.
+  const activePath = (() => {
+    let best = "";
+    for (const item of nav) {
+      if (pathname === item.path || pathname.startsWith(item.path + "/")) {
+        if (item.path.length > best.length) best = item.path;
+      }
+    }
+    return best;
+  })();
+  const isActive = (path: string) => path === activePath;
 
   const SidebarContent = () => (
     <>
@@ -202,7 +225,7 @@ export function AppShell({
             <div className="text-xs text-muted-foreground leading-relaxed mb-2">
               {activeModel
                 ? `${activeModel.version} · ${activeModel.architecture ?? "ISIC-2019"}`
-                : "v1.0 · ISIC-2019 validation."}
+                : "Loading model…"}
             </div>
             <Button
               variant="outline"

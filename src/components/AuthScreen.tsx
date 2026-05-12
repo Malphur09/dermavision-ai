@@ -1,5 +1,5 @@
 "use client";
-import { useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -34,6 +34,26 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
   const [license, setLicense] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [remember, setRemember] = useState(false);
+  const [modelVersion, setModelVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/model/versions");
+        const j = await r.json();
+        const prod = (j.versions ?? []).find(
+          (v: { status?: string }) => v.status === "production"
+        );
+        if (!cancelled) setModelVersion(prod?.version ?? null);
+      } catch {
+        // fallback handled by render
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [errors, setErrors] = useState<{
     email?: string;
     password?: string;
@@ -583,7 +603,9 @@ export function AuthScreen({ onLogin, suspended = false }: AuthScreenProps) {
                 background: "oklch(0.85 0.15 140)",
               }}
             />
-            <span className="text-xs mono tracking-wide">MODEL v1.0</span>
+            <span className="text-xs mono tracking-wide">
+              MODEL {modelVersion ?? "…"}
+            </span>
           </div>
           <h2 className="text-4xl font-semibold tracking-tight mb-4 leading-tight">
             Decision support for

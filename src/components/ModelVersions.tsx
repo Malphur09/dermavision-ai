@@ -1,11 +1,16 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MoreHorizontal, Upload } from "lucide-react";
+import { MoreHorizontal, Pencil, Upload } from "lucide-react";
+import { toast } from "sonner";
 
 import { ISIC_CLASSES } from "@/lib/isic-classes";
+import { createClient } from "@/lib/supabase/client";
 import { PageHeader } from "@/components/primitives/PageHeader";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -13,17 +18,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
-interface ModelVersion {
-  version: string;
-  status: "production" | "staging" | "archived";
-  accuracy: number;
-  date: string;
-  architecture: string;
-  params: string;
-  notes: string;
-}
+import type { ModelVersion } from "@/lib/api-types";
 
+// Per-class slice used in this screen — only F1 is read here, so keep it
+// narrow to avoid pulling the wide shared shape across the wire mapping.
 interface PerClass {
   code: string;
   f1: number;
@@ -68,32 +81,83 @@ export function ModelVersions() {
   const [perClass, setPerClass] = useState<PerClass[]>([]);
   const [compareA, setCompareA] = useState<string>("");
   const [compareB, setCompareB] = useState<string>("");
+  const [editing, setEditing] = useState<ModelVersion | null>(null);
+  const [editForm, setEditForm] = useState({
+    version: "",
+    architecture: "",
+    params: "",
+    notes: "",
+  });
+  const [editSaving, setEditSaving] = useState(false);
+
+  const fetchJson = async <T,>(url: string): Promise<T | null> => {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      return (await r.json()) as T;
+    } catch {
+      return null;
+    }
+  };
+
+  const loadVersions = useCallback(async () => {
+    const [vRes, pRes] = await Promise.all([
+      fetchJson<{ versions: ModelVersion[] }>("/api/model/versions"),
+      fetchJson<{ classes: PerClass[] }>("/api/metrics/per_class"),
+    ]);
+    const vList = vRes?.versions ?? [];
+    setVersions(vList);
+    setPerClass(pRes?.classes ?? []);
+    if (vList.length) {
+      setCompareA((prev) => prev || vList[0].version);
+      setCompareB((prev) => prev || vList[1]?.version || vList[0].version);
+    }
+  }, []);
 
   useEffect(() => {
-    const fetchJson = async <T,>(url: string): Promise<T | null> => {
-      try {
-        const r = await fetch(url);
-        if (!r.ok) return null;
-        return (await r.json()) as T;
-      } catch {
-        return null;
+    void loadVersions();
+  }, [loadVersions]);
+
+  const openEdit = (v: ModelVersion) => {
+    setEditing(v);
+    setEditForm({
+      version: v.version ?? "",
+      architecture: v.architecture ?? "",
+      params: v.params ?? "",
+      notes: v.notes ?? "",
+    });
+  };
+
+  const submitEdit = async () => {
+    if (!editing?.id) {
+      toast.error("Cannot edit — missing version id");
+      return;
+    }
+    setEditSaving(true);
+    try {
+      const supabase = createClient();
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      const res = await fetch(`/api/model/versions/${editing.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(editForm),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        toast.error(j.error ?? `Update failed (HTTP ${res.status})`);
+        return;
       }
-    };
-    const load = async () => {
-      const [vRes, pRes] = await Promise.all([
-        fetchJson<{ versions: ModelVersion[] }>("/api/model/versions"),
-        fetchJson<{ classes: PerClass[] }>("/api/metrics/per_class"),
-      ]);
-      const vList = vRes?.versions ?? [];
-      setVersions(vList);
-      setPerClass(pRes?.classes ?? []);
-      if (vList.length) {
-        setCompareA(vList[0].version);
-        setCompareB(vList[1]?.version ?? vList[0].version);
-      }
-    };
-    void load();
-  }, []);
+      toast.success("Model details updated");
+      setEditing(null);
+      await loadVersions();
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   const va = useMemo(
     () => versions.find((v) => v.version === compareA) ?? versions[0],
@@ -167,7 +231,9 @@ export function ModelVersions() {
                   <div>
                     <div className="text-xs text-muted-foreground">Accuracy</div>
                     <div className="mono font-medium">
-                      {(side.v.accuracy * 100).toFixed(1)}%
+                      {side.v.accuracy != null
+                        ? `${(side.v.accuracy * 100).toFixed(1)}%`
+                        : "n/a"}
                     </div>
                   </div>
                   <div>
@@ -310,7 +376,9 @@ export function ModelVersions() {
                         <StatusBadge status={v.status} />
                       </td>
                       <td className="px-5 py-3 mono text-sm">
-                        {(v.accuracy * 100).toFixed(1)}%
+                        {v.accuracy != null
+                          ? `${(v.accuracy * 100).toFixed(1)}%`
+                          : "n/a"}
                       </td>
                       <td className="px-5 py-3 text-sm text-muted-foreground">
                         {v.architecture}
@@ -322,9 +390,29 @@ export function ModelVersions() {
                         {v.notes}
                       </td>
                       <td className="px-5 py-3">
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <MoreHorizontal size={14} />
-                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              aria-label="Version actions"
+                            >
+                              <MoreHorizontal size={14} />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onSelect={(e) => {
+                                e.preventDefault();
+                                openEdit(v);
+                              }}
+                              disabled={!v.id}
+                            >
+                              <Pencil size={12} /> Edit details
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </td>
                     </tr>
                   ))}
@@ -334,6 +422,84 @@ export function ModelVersions() {
           </div>
         </>
       )}
+
+      <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit model details</DialogTitle>
+            <DialogDescription>
+              Version metadata only — status, deploy date, and metrics are managed by
+              the upload/deploy lifecycle.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="edit-version">Version</Label>
+              <Input
+                id="edit-version"
+                value={editForm.version}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, version: e.target.value }))
+                }
+                placeholder="v1.2"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit-arch">Architecture</Label>
+              <Input
+                id="edit-arch"
+                value={editForm.architecture}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, architecture: e.target.value }))
+                }
+                placeholder="EfficientNetB4 / ConvNeXt ensemble / …"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit-params">Parameters</Label>
+              <Input
+                id="edit-params"
+                value={editForm.params}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, params: e.target.value }))
+                }
+                placeholder="19M, ~70M, …"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="edit-notes">Notes</Label>
+              <Textarea
+                id="edit-notes"
+                value={editForm.notes}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, notes: e.target.value }))
+                }
+                rows={4}
+                className="mt-1 resize-none text-sm"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setEditing(null)}
+              disabled={editSaving}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="brand"
+              onClick={submitEdit}
+              disabled={editSaving || !editForm.version.trim()}
+            >
+              {editSaving ? "Saving…" : "Save changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

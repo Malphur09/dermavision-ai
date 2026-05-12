@@ -12,59 +12,12 @@ real metrics pipeline ingests a training artifact.
 from typing import Any, Optional
 
 import numpy as np
-import requests
 from flask import Blueprint, jsonify
 
-from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, service_headers
+from api.classes import ISIC_CLASSES
+from api.supabase import rest_get as _rest_get, rest_post, rpc as _rpc
 
 metrics_bp = Blueprint("metrics", __name__, url_prefix="/api")
-
-ISIC_CLASSES = [
-    {"code": "MEL", "full": "Melanoma"},
-    {"code": "NV", "full": "Melanocytic Nevus"},
-    {"code": "BCC", "full": "Basal Cell Carcinoma"},
-    {"code": "AK", "full": "Actinic Keratosis"},
-    {"code": "BKL", "full": "Benign Keratosis"},
-    {"code": "DF", "full": "Dermatofibroma"},
-    {"code": "VASC", "full": "Vascular Lesion"},
-    {"code": "SCC", "full": "Squamous Cell Carcinoma"},
-]
-
-
-# ---------- Supabase helpers ----------
-
-def _rest_get(path: str, params: Optional[dict] = None) -> Any:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/rest/v1/{path}",
-            params=params or {},
-            headers=service_headers(),
-            timeout=5,
-        )
-        if resp.status_code != 200:
-            return None
-        return resp.json()
-    except Exception:
-        return None
-
-
-def _rpc(fn: str, body: Optional[dict] = None) -> Any:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/{fn}",
-            json=body or {},
-            headers=service_headers(),
-            timeout=5,
-        )
-        if resp.status_code != 200:
-            return None
-        return resp.json()
-    except Exception:
-        return None
 
 
 def _active_version() -> Optional[dict]:
@@ -175,6 +128,26 @@ def _synthetic_drift():
 
 # ---------- Endpoints ----------
 
+def _previous_summary() -> Optional[dict]:
+    """Most recent archived version's summary metric (for delta computation)."""
+    rows = _rest_get(
+        "model_versions",
+        {
+            "status": "eq.archived",
+            "select": "id,version,deployed_at",
+            "order": "deployed_at.desc",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        return None
+    prev = rows[0]
+    stored = _get_metric(prev["id"], "summary")
+    if not isinstance(stored, dict):
+        return None
+    return {"version": prev.get("version"), **stored}
+
+
 @metrics_bp.route("/metrics/summary")
 def metrics_summary():
     version = _active_version()
@@ -185,8 +158,12 @@ def metrics_summary():
         payload = {**_synthetic_summary(), "synthetic": True}
     else:
         payload = {
+            "version": version.get("version") if version else None,
             "balanced_acc": stored.get("balanced_acc"),
             "macro_f1": stored.get("macro_f1"),
+            "accuracy": stored.get("accuracy"),
+            "weighted_f1": stored.get("weighted_f1"),
+            "macro_auc_ovr": stored.get("macro_auc_ovr"),
             "last_trained_at": stored.get("last_trained_at")
             or (version.get("deployed_at") if version else None),
             "p50_latency_ms": stored.get("p50_latency_ms", 0),
@@ -196,6 +173,7 @@ def metrics_summary():
     if isinstance(p50, int):
         payload["p50_latency_ms"] = p50
 
+    payload["previous"] = _previous_summary()
     return jsonify(payload)
 
 
@@ -233,10 +211,33 @@ def metrics_confusion():
 def metrics_drift():
     version = _active_version()
     if version:
+        from api.drift import compute_drift_window
+        live = compute_drift_window(version["id"])
+        if live:
+            return jsonify({**live, "synthetic": False})
         stored = _get_metric(version["id"], "drift")
         if stored and isinstance(stored, dict):
             return jsonify({**stored, "synthetic": False})
     return jsonify({**_synthetic_drift(), "synthetic": True})
+
+
+@metrics_bp.route("/metrics/latency")
+def metrics_latency():
+    """Real p50/p95/p99 + throughput from inference_telemetry."""
+    payload = _rpc("latency_quantiles", {"window_days": 7})
+    if isinstance(payload, dict):
+        return jsonify({**payload, "synthetic": False})
+    return jsonify(
+        {
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "p99_ms": 0,
+            "count": 0,
+            "window_days": 7,
+            "throughput_per_hr": 0,
+            "synthetic": True,
+        }
+    )
 
 
 @metrics_bp.route("/model/versions")
@@ -244,7 +245,7 @@ def model_versions():
     rows = _rest_get(
         "model_versions",
         {
-            "select": "version,status,architecture,params,notes,deployed_at,created_at",
+            "select": "id,version,status,architecture,params,notes,deployed_at,created_at",
             "order": "created_at.desc",
         },
     )
@@ -266,18 +267,22 @@ def model_versions():
             }
         )
 
-    out = [
-        {
-            "version": r.get("version"),
-            "status": r.get("status"),
-            "architecture": r.get("architecture"),
-            "params": r.get("params"),
-            "notes": r.get("notes"),
-            "date": (r.get("deployed_at") or r.get("created_at") or "")[:10],
-            "accuracy": None,
-        }
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        summary = _get_metric(r.get("id"), "summary") if r.get("id") else None
+        balanced_acc = summary.get("balanced_acc") if isinstance(summary, dict) else None
+        out.append(
+            {
+                "id": r.get("id"),
+                "version": r.get("version"),
+                "status": r.get("status"),
+                "architecture": r.get("architecture"),
+                "params": r.get("params"),
+                "notes": r.get("notes"),
+                "date": (r.get("deployed_at") or r.get("created_at") or "")[:10],
+                "accuracy": balanced_acc,
+            }
+        )
     return jsonify({"versions": out, "synthetic": False})
 
 
@@ -295,8 +300,6 @@ def ingest_metrics(version_id: str, metrics_json: dict) -> bool:
             "drift": { window, values }
         }
     """
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return False
     rows = [
         {"version_id": version_id, "metric_key": k, "metric_value": v}
         for k, v in metrics_json.items()
@@ -304,34 +307,16 @@ def ingest_metrics(version_id: str, metrics_json: dict) -> bool:
     ]
     if not rows:
         return True
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/model_metrics",
-            json=rows,
-            headers={**service_headers(), "Prefer": "return=minimal"},
-            timeout=10,
-        )
-        return resp.status_code in (200, 201, 204)
-    except Exception:
-        return False
+    resp = rest_post("model_metrics", rows, prefer_minimal=True)
+    return bool(resp and resp.status_code in (200, 201, 204))
 
 
 def insert_telemetry(case_id: Optional[str], latency_ms: int) -> None:
     """Non-blocking insert into inference_telemetry. Never raises."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return
     version = _active_version()
     body = {
         "case_id": case_id,
         "version_id": version["id"] if version else None,
         "latency_ms": int(max(0, latency_ms)),
     }
-    try:
-        requests.post(
-            f"{SUPABASE_URL}/rest/v1/inference_telemetry",
-            json=body,
-            headers={**service_headers(), "Prefer": "return=minimal"},
-            timeout=2,
-        )
-    except Exception:
-        pass
+    rest_post("inference_telemetry", body, prefer_minimal=True, timeout=2.0)

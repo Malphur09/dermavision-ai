@@ -1,69 +1,22 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import {
-  CheckCircle,
-  Clock,
-  Image as ImageIcon,
-  Lock,
-  Plus,
-  Shield,
-  Sparkles,
-  Upload as UploadIcon,
-} from "lucide-react";
 import { toast } from "sonner";
 
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageHeader } from "@/components/primitives/PageHeader";
-import { Alert } from "@/components/primitives/Alert";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Progress } from "@/components/ui/progress";
+  RISK_LEVEL,
+  type Patient,
+  type Step,
+} from "@/components/diagnostic/constants";
+import { CaseDetailsSidebar } from "@/components/diagnostic/CaseDetailsSidebar";
+import { UploadDropzone } from "@/components/diagnostic/UploadDropzone";
 
 const IMAGES_BUCKET = "dermoscopic-images";
 const HEATMAPS_BUCKET = "heatmaps";
-
-const RISK_LEVEL: Record<string, "High Risk" | "Moderate Risk" | "Benign"> = {
-  Melanoma: "High Risk",
-  "Squamous Cell Carcinoma": "High Risk",
-  "Basal Cell Carcinoma": "High Risk",
-  "Actinic Keratosis": "Moderate Risk",
-  "Melanocytic Nevus": "Benign",
-  "Benign Keratosis": "Benign",
-  Dermatofibroma: "Benign",
-  "Vascular Lesion": "Benign",
-};
-
-const ANATOMICAL_SITES = [
-  "back",
-  "arm",
-  "leg",
-  "face",
-  "chest",
-  "abdomen",
-  "hand",
-  "foot",
-];
-
-type Patient = {
-  id: string;
-  patient_id: string;
-  name: string;
-  age: number | null;
-  sex: string | null;
-};
-
-type Step = "select" | "uploading" | "ready";
 
 interface DiagnosticInputProps {
   onNavigateToResults: () => void;
@@ -125,23 +78,6 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
     }
   };
 
-  const validateAndSetFile = useCallback((file: File) => {
-    if (!["image/jpeg", "image/jpg", "image/png"].includes(file.type)) {
-      toast.error("Invalid file type. JPEG or PNG only.");
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      toast.error("File exceeds 10MB limit");
-      return;
-    }
-    if (file.size < 10 * 1024) {
-      toast.error("File too small");
-      return;
-    }
-    setUploadedFile(file);
-    simulateUpload();
-  }, []);
-
   const simulateUpload = () => {
     setStep("uploading");
     setProgress(0);
@@ -158,6 +94,23 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
       }
     }, 140);
   };
+
+  const validateAndSetFile = useCallback((file: File) => {
+    if (!["image/jpeg", "image/jpg", "image/png"].includes(file.type)) {
+      toast.error("Invalid file type. JPEG or PNG only.");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("File exceeds 10MB limit");
+      return;
+    }
+    if (file.size < 10 * 1024) {
+      toast.error("File too small");
+      return;
+    }
+    setUploadedFile(file);
+    simulateUpload();
+  }, []);
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -289,11 +242,19 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
     const predictController = new AbortController();
     const predictTimeout = setTimeout(() => predictController.abort(), 60_000);
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token ?? null;
       const res = await fetch("/api/predict", {
         method: "POST",
         body: formData,
         signal: predictController.signal,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
+      if (res.status === 429) {
+        toast.error("Too many requests — slow down for a minute");
+        setIsProcessing(false);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       prediction = await res.json();
     } catch (err) {
@@ -376,13 +337,22 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
       try {
         const camForm = new FormData();
         camForm.append("file", uploadedFile);
+        const { data: camSession } = await supabase.auth.getSession();
+        const camToken = camSession.session?.access_token ?? null;
         const camRes = await fetch("/api/gradcam", {
           method: "POST",
           body: camForm,
+          headers: camToken ? { Authorization: `Bearer ${camToken}` } : {},
         });
-        if (!camRes.ok) return;
-        const camData: { heatmap: string | null } = await camRes.json();
-        if (!camData.heatmap) return;
+        if (!camRes.ok) {
+          toast.warning(`Heatmap unavailable (HTTP ${camRes.status})`);
+          return;
+        }
+        const camData: { heatmap: string | null; message?: string } = await camRes.json();
+        if (!camData.heatmap) {
+          toast.warning(camData.message ?? "Heatmap unavailable");
+          return;
+        }
 
         const stored = sessionStorage.getItem("lastCase");
         if (stored) {
@@ -395,8 +365,6 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
           );
         }
 
-        // Persist heatmap to storage so it survives page refresh + is available
-        // for audit/review. Heatmap arrives as a base64 data URL; convert to blob.
         const blob = await (await fetch(camData.heatmap)).blob();
         const heatmapPath = `${user!.id}/${newCase.id}.png`;
         const { error: hmUploadErr } = await supabase.storage
@@ -405,18 +373,21 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
             contentType: "image/png",
             upsert: true,
           });
-        if (hmUploadErr) return;
+        if (hmUploadErr) {
+          toast.warning(`Heatmap upload failed: ${hmUploadErr.message}`);
+          return;
+        }
         await supabase
           .from("cases")
           .update({ gradcam_url: heatmapPath })
           .eq("id", newCase.id);
-      } catch {
-        /* silent — heatmap is non-critical */
+      } catch (e) {
+        toast.warning(
+          `Heatmap pipeline error: ${e instanceof Error ? e.message : "unknown"}`
+        );
       }
     })();
   };
-
-  const selectedPatient = patients.find((p) => p.id === selectedPatientDbId);
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
@@ -427,340 +398,42 @@ export function DiagnosticInput({ onNavigateToResults }: DiagnosticInputProps) {
       />
 
       <div className="grid gap-6" style={{ gridTemplateColumns: "1fr 320px" }}>
-        <div className="rounded-lg border border-border bg-card p-6">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/jpeg,image/png"
-            onChange={onFileChange}
-            className="hidden"
-          />
+        <UploadDropzone
+          step={step}
+          uploadedFile={uploadedFile}
+          progress={progress}
+          dragging={dragging}
+          isProcessing={isProcessing}
+          fileInputRef={fileInputRef}
+          onFileChange={onFileChange}
+          onDrop={onDrop}
+          setDragging={setDragging}
+          openFileDialog={openFileDialog}
+          runAnalysis={runAnalysis}
+          resetUpload={resetUpload}
+        />
 
-          {step === "select" && (
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={onDrop}
-              onClick={openFileDialog}
-              className="flex flex-col items-center justify-center rounded-md cursor-pointer transition"
-              style={{
-                border: `2px dashed ${
-                  dragging ? "hsl(var(--brand))" : "hsl(var(--border))"
-                }`,
-                background: dragging
-                  ? "hsl(var(--brand) / 0.05)"
-                  : "hsl(var(--muted) / 0.3)",
-                minHeight: 360,
-                padding: 40,
-                textAlign: "center",
-              }}
-            >
-              <div
-                className="p-4 rounded-full mb-4"
-                style={{
-                  background: "hsl(var(--brand) / 0.1)",
-                  color: "hsl(var(--brand))",
-                }}
-              >
-                <UploadIcon size={28} />
-              </div>
-              <h3 className="text-lg font-semibold mb-1">Drop image here</h3>
-              <p className="text-sm text-muted-foreground mb-6">
-                or click to browse · JPG, PNG · max 10 MB
-              </p>
-              <div className="flex items-center gap-2">
-                <Button variant="brand" type="button">
-                  <ImageIcon size={14} /> Choose file
-                </Button>
-              </div>
-              <div className="flex items-center gap-6 mt-8 text-xs text-muted-foreground">
-                <div className="flex items-center gap-1.5">
-                  <Shield size={12} /> HIPAA encrypted
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Lock size={12} /> Private to clinic
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Clock size={12} /> ~340ms inference
-                </div>
-              </div>
-            </div>
-          )}
-
-          {step === "uploading" && (
-            <div
-              className="flex flex-col items-center justify-center"
-              style={{ minHeight: 360 }}
-            >
-              <div className="w-full max-w-md">
-                <div className="flex items-center justify-between text-sm mb-2">
-                  <span className="font-medium truncate mr-2">
-                    {uploadedFile?.name}
-                  </span>
-                  <span className="mono text-muted-foreground">
-                    {Math.floor(progress)}%
-                  </span>
-                </div>
-                <Progress value={progress} />
-                <div className="text-xs text-muted-foreground mt-2 mono">
-                  {progress < 50
-                    ? "Uploading…"
-                    : progress < 95
-                      ? "Preprocessing · normalizing"
-                      : "Ready for inference…"}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {step === "ready" && uploadedFile && (
-            <div
-              className="flex flex-col items-center justify-center"
-              style={{ minHeight: 360 }}
-            >
-              <div className="flex items-center gap-2 text-sm mb-4">
-                <CheckCircle size={16} style={{ color: "hsl(var(--success))" }} />
-                <span className="font-medium">
-                  {uploadedFile.name} · {(uploadedFile.size / 1024).toFixed(1)}{" "}
-                  KB
-                </span>
-              </div>
-              <div className="text-xs text-muted-foreground mb-6">
-                Ready to analyze
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="brand"
-                  size="lg"
-                  onClick={runAnalysis}
-                  disabled={isProcessing}
-                >
-                  <Sparkles size={14} />{" "}
-                  {isProcessing ? "Running analysis…" : "Run analysis"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="lg"
-                  onClick={resetUpload}
-                  disabled={isProcessing}
-                >
-                  Replace image
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-lg border border-border bg-card p-5">
-          <h3 className="font-semibold mb-4">Case details</h3>
-
-          <div className="space-y-4">
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <Label>Patient</Label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsNewPatient((p) => !p);
-                    clearErr("patient");
-                  }}
-                  className="text-xs text-brand inline-flex items-center gap-1"
-                >
-                  <Plus size={10} />
-                  {isNewPatient ? "Use existing" : "New patient"}
-                </button>
-              </div>
-
-              {!isNewPatient ? (
-                <>
-                  <Select
-                    value={selectedPatientDbId}
-                    onValueChange={(v) => {
-                      setSelectedPatientDbId(v);
-                      clearErr("patient");
-                    }}
-                  >
-                    <SelectTrigger
-                      aria-invalid={!!errors.patient}
-                      className="w-full"
-                    >
-                      <SelectValue placeholder="Select patient" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {patients.length === 0 && (
-                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                          No patients yet
-                        </div>
-                      )}
-                      {patients.map((p) => (
-                        <SelectItem key={p.id} value={p.id}>
-                          {p.name} · {p.patient_id}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {selectedPatient && (
-                    <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                      <span>
-                        {selectedPatient.age ?? "—"} ·{" "}
-                        {selectedPatient.sex ?? "—"}
-                      </span>
-                    </div>
-                  )}
-                  {errors.patient && (
-                    <p className="mt-1 text-xs text-destructive">
-                      {errors.patient}
-                    </p>
-                  )}
-                </>
-              ) : (
-                <div className="space-y-3">
-                  <div>
-                    <Label htmlFor="np-id" className="text-xs">
-                      Patient ID
-                    </Label>
-                    <Input
-                      id="np-id"
-                      placeholder={`PT-${new Date().getFullYear()}-001`}
-                      value={newPatientId}
-                      onChange={(e) => {
-                        setNewPatientId(e.target.value);
-                        clearErr("newPatientId");
-                      }}
-                      aria-invalid={!!errors.newPatientId}
-                      className="mt-1"
-                    />
-                    {errors.newPatientId && (
-                      <p className="mt-1 text-xs text-destructive">
-                        {errors.newPatientId}
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <Label htmlFor="np-name" className="text-xs">
-                      Name
-                    </Label>
-                    <Input
-                      id="np-name"
-                      value={newPatientName}
-                      onChange={(e) => {
-                        setNewPatientName(e.target.value);
-                        clearErr("newPatientName");
-                      }}
-                      aria-invalid={!!errors.newPatientName}
-                      className="mt-1"
-                    />
-                    {errors.newPatientName && (
-                      <p className="mt-1 text-xs text-destructive">
-                        {errors.newPatientName}
-                      </p>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <Label htmlFor="np-age" className="text-xs">
-                        Age
-                      </Label>
-                      <Input
-                        id="np-age"
-                        type="number"
-                        value={newAge}
-                        onChange={(e) => {
-                          setNewAge(e.target.value);
-                          clearErr("newAge");
-                        }}
-                        aria-invalid={!!errors.newAge}
-                        className="mt-1"
-                      />
-                      {errors.newAge && (
-                        <p className="mt-1 text-xs text-destructive">
-                          {errors.newAge}
-                        </p>
-                      )}
-                    </div>
-                    <div>
-                      <Label className="text-xs">Sex</Label>
-                      <Select
-                        value={newSex}
-                        onValueChange={(v) => {
-                          setNewSex(v);
-                          clearErr("newSex");
-                        }}
-                      >
-                        <SelectTrigger
-                          aria-invalid={!!errors.newSex}
-                          className="mt-1 w-full"
-                        >
-                          <SelectValue placeholder="—" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="male">Male</SelectItem>
-                          <SelectItem value="female">Female</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {errors.newSex && (
-                        <p className="mt-1 text-xs text-destructive">
-                          {errors.newSex}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <Label>Anatomical site</Label>
-              <Select
-                value={lesionSite}
-                onValueChange={(v) => {
-                  setLesionSite(v);
-                  clearErr("lesionSite");
-                }}
-              >
-                <SelectTrigger
-                  aria-invalid={!!errors.lesionSite}
-                  className="mt-1 w-full"
-                >
-                  <SelectValue placeholder="Select location" />
-                </SelectTrigger>
-                <SelectContent>
-                  {ANATOMICAL_SITES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {s[0].toUpperCase() + s.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {errors.lesionSite && (
-                <p className="mt-1 text-xs text-destructive">
-                  {errors.lesionSite}
-                </p>
-              )}
-            </div>
-
-            <div>
-              <Label htmlFor="notes">Clinical notes</Label>
-              <Textarea
-                id="notes"
-                value={clinicalNotes}
-                onChange={(e) => setClinicalNotes(e.target.value)}
-                placeholder="Any relevant history or observations…"
-                className="mt-1 h-20 resize-y"
-              />
-            </div>
-
-            <Alert variant="info" title="Decision support only">
-              <span className="text-xs">
-                All predictions require clinician review and are not a
-                diagnosis.
-              </span>
-            </Alert>
-          </div>
-        </div>
+        <CaseDetailsSidebar
+          patients={patients}
+          isNewPatient={isNewPatient}
+          setIsNewPatient={setIsNewPatient}
+          selectedPatientDbId={selectedPatientDbId}
+          setSelectedPatientDbId={setSelectedPatientDbId}
+          newPatientId={newPatientId}
+          setNewPatientId={setNewPatientId}
+          newPatientName={newPatientName}
+          setNewPatientName={setNewPatientName}
+          newAge={newAge}
+          setNewAge={setNewAge}
+          newSex={newSex}
+          setNewSex={setNewSex}
+          lesionSite={lesionSite}
+          setLesionSite={setLesionSite}
+          clinicalNotes={clinicalNotes}
+          setClinicalNotes={setClinicalNotes}
+          errors={errors}
+          clearErr={clearErr}
+        />
       </div>
     </div>
   );

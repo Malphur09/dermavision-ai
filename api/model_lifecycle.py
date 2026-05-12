@@ -17,60 +17,36 @@ from typing import Any, Optional
 
 import onnx
 import onnx2torch
-import requests
 import torch
 from flask import Blueprint, jsonify, request
 
-from api._auth import SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, require_admin, service_headers
+from api._auth import require_admin
 from api.metrics import _rest_get, ingest_metrics
+from api.supabase import (
+    rest_patch as _rest_patch_lib,
+    rest_post as _rest_post_lib,
+    storage_get,
+    storage_upload as _storage_upload_lib,
+)
+from api import eval_set
 
 model_lifecycle_bp = Blueprint("model_lifecycle", __name__, url_prefix="/api")
 
 BUCKET = "model-uploads"
-EXPECTED_INPUT_SHAPE = (1, 3, 456, 456)
-EXPECTED_OUTPUT_SHAPE = (1, 8)
+EXPECTED_OUTPUT_CLASSES = 8
+ALLOWED_INPUT_SIZES = (224, 256, 299, 320, 380, 384, 416, 448, 456, 512)
 BENCH_RUNS = 20
 
 
 # ---------- Storage helpers ----------
 
 def _storage_download(path: str) -> Optional[bytes]:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return None
-    try:
-        resp = requests.get(
-            f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{path}",
-            headers={
-                "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            },
-            timeout=120,
-        )
-        if resp.status_code != 200:
-            return None
-        return resp.content
-    except Exception:
-        return None
+    return storage_get(BUCKET, path, timeout=120)
 
 
 def _storage_upload(path: str, data: bytes, content_type: str = "application/octet-stream") -> bool:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return False
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{path}",
-            data=data,
-            headers={
-                "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-                "Content-Type": content_type,
-                "x-upsert": "true",
-            },
-            timeout=120,
-        )
-        return resp.status_code in (200, 201)
-    except Exception:
-        return False
+    resp = _storage_upload_lib(BUCKET, path, data, content_type, timeout=120)
+    return bool(resp and resp.status_code in (200, 201))
 
 
 def _storage_copy(src: str, dst: str) -> bool:
@@ -87,64 +63,62 @@ def _storage_copy(src: str, dst: str) -> bool:
 
 
 def _rest_patch(path: str, params: dict, body: dict) -> bool:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        return False
-    try:
-        resp = requests.patch(
-            f"{SUPABASE_URL}/rest/v1/{path}",
-            params=params,
-            json=body,
-            headers={**service_headers(), "Prefer": "return=minimal"},
-            timeout=5,
-        )
-        return resp.status_code in (200, 204)
-    except Exception:
-        return False
+    return _rest_patch_lib(path, params, body)
 
 
 def _rest_post(path: str, body: Any, prefer: str = "return=representation") -> Optional[Any]:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+    resp = _rest_post_lib(path, body, prefer_minimal=(prefer == "return=minimal"))
+    if not resp or resp.status_code not in (200, 201):
         return None
-    try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/rest/v1/{path}",
-            json=body,
-            headers={**service_headers(), "Prefer": prefer},
-            timeout=10,
-        )
-        if resp.status_code not in (200, 201):
-            return None
-        return resp.json() if resp.text else None
-    except Exception:
-        return None
+    return resp.json() if resp.text else None
 
 
 # ---------- ONNX helpers ----------
 
-def _check_shapes(model: onnx.ModelProto) -> Optional[str]:
-    """Return an error string if input/output shapes don't match, else None."""
+def _input_size(model: onnx.ModelProto) -> Optional[int]:
+    """Read square HxW from the model's input shape. Returns None if not square."""
     try:
-        input0 = model.graph.input[0]
         in_shape = tuple(
-            d.dim_value for d in input0.type.tensor_type.shape.dim
+            d.dim_value for d in model.graph.input[0].type.tensor_type.shape.dim
         )
-        output0 = model.graph.output[0]
+    except Exception:
+        return None
+    if len(in_shape) != 4 or in_shape[1] != 3:
+        return None
+    h, w = in_shape[2], in_shape[3]
+    if h != w or h <= 0:
+        return None
+    return h
+
+
+def _check_shapes(model: onnx.ModelProto) -> Optional[str]:
+    """Validate (B, 3, H, H) input + (B, 8) output. Allows dynamic batch.
+
+    H must be one of ALLOWED_INPUT_SIZES so eval+preprocess don't have to
+    handle arbitrary resolutions.
+    """
+    try:
+        in_shape = tuple(
+            d.dim_value for d in model.graph.input[0].type.tensor_type.shape.dim
+        )
         out_shape = tuple(
-            d.dim_value for d in output0.type.tensor_type.shape.dim
+            d.dim_value for d in model.graph.output[0].type.tensor_type.shape.dim
         )
     except Exception as e:
         return f"Unable to read tensor shapes: {e}"
 
-    if in_shape != EXPECTED_INPUT_SHAPE:
-        # Allow dynamic batch: treat 0/None first dim as 1.
-        in_fixed = (1,) + in_shape[1:] if len(in_shape) == 4 and in_shape[0] in (0, None) else in_shape
-        if in_fixed != EXPECTED_INPUT_SHAPE:
-            return f"Input shape {in_shape} != expected {EXPECTED_INPUT_SHAPE}"
+    if len(in_shape) != 4:
+        return f"Input rank {len(in_shape)} (expected 4: NCHW)"
+    if in_shape[1] != 3:
+        return f"Input channels {in_shape[1]} (expected 3)"
+    if in_shape[2] != in_shape[3] or in_shape[2] not in ALLOWED_INPUT_SIZES:
+        return (
+            f"Input HxW {in_shape[2]}x{in_shape[3]} not in supported sizes "
+            f"{ALLOWED_INPUT_SIZES}"
+        )
 
-    if out_shape != EXPECTED_OUTPUT_SHAPE:
-        out_fixed = (1,) + out_shape[1:] if len(out_shape) == 2 and out_shape[0] in (0, None) else out_shape
-        if out_fixed != EXPECTED_OUTPUT_SHAPE:
-            return f"Output shape {out_shape} != expected {EXPECTED_OUTPUT_SHAPE}"
+    if len(out_shape) != 2 or out_shape[1] != EXPECTED_OUTPUT_CLASSES:
+        return f"Output {out_shape} (expected (*, {EXPECTED_OUTPUT_CLASSES}))"
     return None
 
 
@@ -191,6 +165,7 @@ def validate():
     if shape_err:
         return jsonify({"ok": False, "error": shape_err}), 400
 
+    detected_size = _input_size(model)
     return jsonify(
         {
             "ok": True,
@@ -199,8 +174,8 @@ def validate():
             "format": "onnx",
             "checks": {
                 "structural": True,
-                "input_shape": list(EXPECTED_INPUT_SHAPE),
-                "output_shape": list(EXPECTED_OUTPUT_SHAPE),
+                "input_size": detected_size,
+                "output_classes": EXPECTED_OUTPUT_CLASSES,
             },
         }
     )
@@ -222,12 +197,15 @@ def benchmark():
         return jsonify({"error": "Benchmark only supported for .onnx"}), 400
 
     try:
-        model = onnx2torch.convert(onnx.load_from_string(data))
-        model.eval()
+        onnx_model = onnx.load_from_string(data)
+        size = _input_size(onnx_model) or 384
+        from api.backend import load_inference
+
+        model = load_inference(data)
     except Exception as e:
         return jsonify({"error": f"Model conversion failed: {e}"}), 400
 
-    dummy = torch.randn(*EXPECTED_INPUT_SHAPE, dtype=torch.float32)
+    dummy = torch.randn(1, 3, size, size, dtype=torch.float32)
     latencies = []
     with torch.no_grad():
         # Warmup.
@@ -241,15 +219,38 @@ def benchmark():
     median_ms = int(statistics.median(latencies))
     p95_ms = int(sorted(latencies)[int(len(latencies) * 0.95) - 1])
 
+    eval_results = None
+    try:
+        eval_results = eval_set.evaluate(model, input_size=size)
+    except Exception as e:
+        # Eval is best-effort; never fail the latency benchmark on it.
+        print(f"[WARNING] Eval-set evaluation failed: {e}")
+
+    if eval_results is None:
+        return jsonify(
+            {
+                "accuracy": None,
+                "f1": None,
+                "latency_ms": median_ms,
+                "latency_p95_ms": p95_ms,
+                "runs": BENCH_RUNS,
+                "eval_set_available": False,
+                "note": "Latency is real; accuracy/F1 null until an eval set is provisioned under eval-set/ in the model-uploads bucket.",
+            }
+        )
+
     return jsonify(
         {
-            "accuracy": None,
-            "f1": None,
+            "accuracy": eval_results["accuracy"],
+            "balanced_acc": eval_results["balanced_acc"],
+            "f1": eval_results["macro_f1"],
+            "per_class": eval_results["per_class"],
+            "confusion": eval_results["confusion"],
+            "eval_total": eval_results["total"],
             "latency_ms": median_ms,
             "latency_p95_ms": p95_ms,
             "runs": BENCH_RUNS,
-            "eval_set_available": False,
-            "note": "Latency is real; accuracy/F1 null until an eval set is provisioned under eval-set/ in the model-uploads bucket.",
+            "eval_set_available": True,
         }
     )
 
@@ -320,13 +321,23 @@ def deploy():
     # result of /model/upload/benchmark back on deploy). Accuracy may be null
     # if no eval set was available; ingest what we have.
     if new_id and bench:
-        summary = {
-            "balanced_acc": bench.get("accuracy"),
-            "macro_f1": bench.get("f1"),
-            "p50_latency_ms": bench.get("latency_ms"),
-            "last_trained_at": None,
+        payload: dict = {
+            "summary": {
+                "balanced_acc": bench.get("balanced_acc") or bench.get("accuracy"),
+                "macro_f1": bench.get("f1"),
+                "p50_latency_ms": bench.get("latency_ms"),
+                "last_trained_at": None,
+            }
         }
-        ingest_metrics(new_id, {"summary": summary})
+        if isinstance(bench.get("per_class"), list):
+            payload["per_class"] = bench["per_class"]
+        if isinstance(bench.get("confusion"), dict):
+            payload["confusion"] = bench["confusion"]
+        ingest_metrics(new_id, payload)
+        # Reference distribution changed — drop cached PSI windows so the
+        # next /api/metrics/drift recomputes against the new per_class support.
+        from api.drift import invalidate_cache
+        invalidate_cache()
 
     return jsonify(
         {
@@ -337,4 +348,28 @@ def deploy():
         }
     )
 
+
+
+
+EDITABLE_FIELDS = {"version", "architecture", "params", "notes"}
+
+
+@model_lifecycle_bp.route("/model/versions/<version_id>", methods=["PATCH"])
+@require_admin
+def patch_version(version_id: str):
+    """Edit a model_versions row. Admin-gated.
+
+    Whitelisted keys only — status / onnx_path / metrics live elsewhere in the
+    lifecycle and should not be hand-edited.
+    """
+    body = request.get_json(silent=True) or {}
+    updates = {k: v for k, v in body.items() if k in EDITABLE_FIELDS}
+    if not updates:
+        return jsonify({"error": "No editable fields supplied"}), 400
+    if "version" in updates and not str(updates["version"]).strip():
+        return jsonify({"error": "version cannot be blank"}), 400
+    ok = _rest_patch_lib("model_versions", {"id": f"eq.{version_id}"}, updates)
+    if not ok:
+        return jsonify({"error": "Update failed"}), 502
+    return jsonify({"updated": True, "id": version_id, "fields": list(updates.keys())})
 

@@ -13,13 +13,29 @@ from __future__ import annotations
 import base64
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
 from flask import Blueprint, Response, jsonify, request
 
 from api._auth import SUPABASE_ANON_KEY, SUPABASE_URL, require_user
+from api.supabase import rest_get as _service_rest_get
+
+
+def _active_model_meta() -> dict:
+    """Return {version, architecture} for the production model, or empty dict."""
+    rows = _service_rest_get(
+        "model_versions",
+        {
+            "status": "eq.production",
+            "select": "version,architecture",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        return {}
+    return rows[0] or {}
 
 reports_bp = Blueprint("reports", __name__, url_prefix="/api/reports")
 
@@ -136,7 +152,7 @@ def _build_html(case: dict, user: dict, user_details: dict | None, sections: dic
     doctor_name = (user_details or {}).get("full_name") or user.get("email", "—")
     clinic = (user_details or {}).get("clinic_name") or ""
     license_no = (user_details or {}).get("license") or ""
-    generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     risk_color = {
         "High Risk": "#dc2626",
@@ -221,6 +237,9 @@ def _build_html(case: dict, user: dict, user_details: dict | None, sections: dic
 
     tech_block = ""
     if sections.get("technicalDetails"):
+        model = _active_model_meta()
+        version = model.get("version") or "—"
+        arch = model.get("architecture") or "—"
         tech_block = f"""
         <section class="card">
           <h2>Technical</h2>
@@ -228,7 +247,7 @@ def _build_html(case: dict, user: dict, user_details: dict | None, sections: dic
             <dt>Case ID</dt><dd class="mono">{case.get('id')}</dd>
             <dt>Status</dt><dd>{case.get('status') or '—'}</dd>
             <dt>Captured</dt><dd>{case.get('created_at') or '—'}</dd>
-            <dt>Model</dt><dd>EfficientNet-B4 · ISIC 2019 (8 classes)</dd>
+            <dt>Model</dt><dd>{version} · {arch}</dd>
           </dl>
         </section>
         """
@@ -305,7 +324,7 @@ def _render_pdf(html: str) -> bytes:
 
 def _render_json(case: dict, user: dict, sections: dict) -> bytes:
     payload: dict[str, Any] = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "doctor": {"id": user.get("id"), "email": user.get("email")},
         "sections": sections,
         "case": case,

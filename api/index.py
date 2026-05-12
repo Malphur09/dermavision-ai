@@ -14,6 +14,7 @@ from pytorch_grad_cam import GradCAMPlusPlus
 from pytorch_grad_cam.utils.image import show_cam_on_image
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_limiter import Limiter
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,27 +22,41 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, origins=["http://localhost:3000"])
 
+
+def _rate_limit_key():
+    """Per-user limiter key. Falls back to IP when caller is unauthed.
+
+    Pulled from request.environ['caller'] which @require_user injects.
+    """
+    caller = request.environ.get("caller") or {}
+    user = caller.get("user") if isinstance(caller, dict) else None
+    if user and user.get("id"):
+        return f"user:{user['id']}"
+    return f"ip:{request.remote_addr or 'unknown'}"
+
+
+limiter = Limiter(
+    key_func=_rate_limit_key,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
+from api._auth import require_user  # noqa: E402
 from api.admin import admin_bp  # noqa: E402
 from api.metrics import metrics_bp, insert_telemetry  # noqa: E402
 from api.auth import auth_bp  # noqa: E402
 from api.reports import reports_bp  # noqa: E402
 from api.model_lifecycle import model_lifecycle_bp  # noqa: E402
+from api import preprocess as _preprocess  # noqa: E402
+from api.preprocess import preprocess_bytes  # noqa: E402
 app.register_blueprint(admin_bp)
 app.register_blueprint(metrics_bp)
 app.register_blueprint(auth_bp)
 app.register_blueprint(reports_bp)
 app.register_blueprint(model_lifecycle_bp)
 
-CLASSES = [
-    "Melanoma",
-    "Melanocytic Nevus",
-    "Basal Cell Carcinoma",
-    "Actinic Keratosis",
-    "Benign Keratosis",
-    "Dermatofibroma",
-    "Vascular Lesion",
-    "Squamous Cell Carcinoma",
-]
+from api.classes import ISIC_FULL as CLASSES  # noqa: E402
 
 MODEL_PATH = os.getenv("MODEL_PATH", "efficientnetb4_isic2019.onnx")
 
@@ -60,40 +75,78 @@ _version_last_checked: float = 0.0
 _VERSION_TTL_S: float = 60.0
 
 
-def _set_active_model(model: nn.Module) -> None:
+def _detect_input_size(callable_model) -> int | None:
+    """Probe a candidate input size by running a forward pass."""
+    for size in (384, 456, 224, 512, 299, 320, 380, 416):
+        try:
+            with torch.no_grad():
+                _ = callable_model(torch.zeros(1, 3, size, size, dtype=torch.float32))
+            return size
+        except Exception:
+            continue
+    return None
+
+
+def _set_active_model(backend) -> None:
+    """Install a backend. Bespoke gradcam (PthBackend) bypasses target-layer hunt."""
     global torch_model, target_layer
     last_conv = None
-    for m in model.modules():
-        if isinstance(m, nn.Conv2d):
-            last_conv = m
-    if last_conv is None:
-        raise RuntimeError("No Conv2d found in converted model")
+    has_bespoke = hasattr(backend, "gradcam") and callable(getattr(backend, "gradcam"))
+    if not has_bespoke and getattr(backend, "supports_gradcam", False):
+        for m in backend.torch_module.modules():
+            if isinstance(m, nn.Conv2d):
+                last_conv = m
+    size = _detect_input_size(backend)
     with _model_swap_lock:
-        torch_model = model
+        torch_model = backend
         target_layer = last_conv
+    if size:
+        _preprocess.set_input_size(size)
+        status = "bespoke" if has_bespoke else ("on" if last_conv else "off")
+        print(f"[INFO] Active model input size: {size}x{size}; gradcam={status}")
 
 
 def _load_model_from_disk():
     try:
-        model = onnx2torch.convert(onnx.load(MODEL_PATH))
-        model.eval()
-        _set_active_model(model)
-        print(f"[INFO] Model loaded from disk: {MODEL_PATH}")
+        with open(MODEL_PATH, "rb") as f:
+            data = f.read()
+        from api.backend import load_inference
+
+        backend = load_inference(data)
+        _set_active_model(backend)
+        print(f"[INFO] Model loaded from disk: {MODEL_PATH} ({type(backend).__name__})")
     except Exception as e:
         print(f"[WARNING] Failed to load model from {MODEL_PATH}: {e}")
+
+
+def _try_load_pth() -> bool:
+    """Load native PyTorch ensemble if PTH_MODEL_PATH env points to a real file."""
+    pth_path = os.getenv("PTH_MODEL_PATH")
+    if not pth_path or not os.path.exists(pth_path):
+        return False
+    try:
+        from api.pth_backend import load_pth
+
+        backend = load_pth(pth_path)
+        _set_active_model(backend)
+        print(f"[INFO] PTH model loaded: {pth_path} (PthBackend)")
+        return True
+    except Exception as e:
+        print(f"[WARNING] PTH load failed for {pth_path}: {e}")
+        return False
 
 
 def _try_reload_from_storage(bucket_path: str) -> bool:
     """Download an ONNX from the model-uploads bucket and swap it in."""
     try:
+        from api.backend import load_inference
         from api.model_lifecycle import _storage_download
 
         data = _storage_download(bucket_path)
         if data is None:
             return False
-        model = onnx2torch.convert(onnx.load_from_string(data))
-        model.eval()
-        _set_active_model(model)
+        backend = load_inference(data)
+        _set_active_model(backend)
         return True
     except Exception as e:
         print(f"[WARNING] Storage reload failed for {bucket_path}: {e}")
@@ -102,6 +155,9 @@ def _try_reload_from_storage(bucket_path: str) -> bool:
 
 def _maybe_refresh_model() -> None:
     global _active_version_id, _active_path, _version_last_checked
+    # PTH side-car pins the active model — skip DB-driven ONNX swaps.
+    if os.getenv("PTH_MODEL_PATH"):
+        return
     now = time.time()
     if now - _version_last_checked < _VERSION_TTL_S:
         return
@@ -129,20 +185,12 @@ def _maybe_refresh_model() -> None:
         print(f"[WARNING] Active version check failed: {e}")
 
 
-_load_model_from_disk()
-
-_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+if not _try_load_pth():
+    _load_model_from_disk()
 
 
 def preprocess_image(file_bytes: bytes):
-    img = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-    img = img.resize((456, 456), Image.BILINEAR)
-    arr = np.array(img, dtype=np.float32) / 255.0
-    rgb_float = arr.copy()
-    arr = (arr - _MEAN) / _STD
-    tensor = torch.from_numpy(arr.transpose(2, 0, 1)).unsqueeze(0)
-    return tensor, rgb_float
+    return preprocess_bytes(file_bytes)
 
 
 @app.route("/api/health")
@@ -151,6 +199,8 @@ def health():
 
 
 @app.route("/api/predict", methods=["POST"])
+@require_user
+@limiter.limit("30 per minute")
 def predict():
     _maybe_refresh_model()
 
@@ -173,11 +223,16 @@ def predict():
 
     t0 = time.perf_counter()
     with torch.no_grad():
-        logits = torch_model(tensor)[0].numpy()
+        raw = torch_model(tensor)[0].numpy()
     latency_ms = int((time.perf_counter() - t0) * 1000)
 
-    exp_logits = np.exp(logits - logits.max())
-    probs = exp_logits / exp_logits.sum()
+    # Detect already-softmaxed outputs (e.g. ensemble exports with a final
+    # Softmax node). Heuristic: all values in [0,1] and sum ≈ 1.
+    if raw.ndim == 1 and 0.0 <= raw.min() and raw.max() <= 1.0 + 1e-3 and abs(raw.sum() - 1.0) < 1e-2:
+        probs = raw
+    else:
+        exp_logits = np.exp(raw - raw.max())
+        probs = exp_logits / exp_logits.sum()
 
     probabilities = {cls: round(float(p), 4) for cls, p in zip(CLASSES, probs)}
     predicted_class = max(probabilities, key=probabilities.get)
@@ -196,6 +251,8 @@ def predict():
 
 
 @app.route("/api/gradcam", methods=["POST"])
+@require_user
+@limiter.limit("15 per minute")
 def gradcam():
     _maybe_refresh_model()
 
@@ -210,16 +267,24 @@ def gradcam():
     if file.content_type not in {"image/jpeg", "image/jpg", "image/png"}:
         return jsonify({"error": "Invalid file type. Only JPEG and PNG are accepted"}), 415
 
-    if torch_model is None or target_layer is None:
+    if torch_model is None:
         return jsonify({"heatmap": None, "message": "Model not loaded"}), 200
+
+    bespoke = hasattr(torch_model, "gradcam") and callable(getattr(torch_model, "gradcam"))
+    if not bespoke and target_layer is None:
+        return jsonify({"heatmap": None, "message": "Grad-CAM unavailable for this model (ORT backend)"}), 200
 
     try:
         image_bytes = file.read()
         tensor, rgb_float = preprocess_image(image_bytes)
 
-        with _cam_lock:
-            cam = GradCAMPlusPlus(model=torch_model, target_layers=[target_layer])
-            grayscale_cam = cam(input_tensor=tensor, targets=None)[0]
+        if bespoke:
+            grayscale_cam = torch_model.gradcam(tensor)
+        else:
+            with _cam_lock:
+                inner = getattr(torch_model, "torch_module", torch_model)
+                cam = GradCAMPlusPlus(model=inner, target_layers=[target_layer])
+                grayscale_cam = cam(input_tensor=tensor, targets=None)[0]
 
         overlay = show_cam_on_image(rgb_float, grayscale_cam, use_rgb=True)
         buf = io.BytesIO()
